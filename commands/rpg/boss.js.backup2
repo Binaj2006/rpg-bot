@@ -1,0 +1,651 @@
+const BossManager = require('../../rpg/dungeons/BossManager');
+const ImprovedCombat = require('../../rpg/utils/ImprovedCombat');
+const StatusEffectManager = require('../../rpg/utils/StatusEffectManager');
+const { updatePlayerGold } = require('../../rpg/utils/GoldManager');
+const BarSystem = require('../../rpg/utils/BarSystem');
+const LevelUpManager = require('../../rpg/utils/LevelUpManager');
+
+module.exports = {
+  name: 'boss',
+  description: 'Fight powerful boss monsters',
+  
+  async execute(sock, msg, args, getDatabase, saveDatabase, sender) {
+    const chatId = msg.key.remoteJid;
+    const db = getDatabase();
+    const player = db.users[sender];
+
+    if (!player) {
+      return sock.sendMessage(chatId, { 
+        text: '❌ You are not registered! Use /register first.' 
+      });
+    }
+
+    const subCommand = args[0]?.toLowerCase();
+    const className = typeof player.class === 'string' ? player.class : (player.class?.name || 'Warrior');
+
+    // ============================================
+    // SUB-COMMAND: /boss list
+    // ============================================
+    if (subCommand === 'list') {
+      const availableBosses = BossManager.getAvailableBosses(player.level);
+      
+      if (availableBosses.length === 0) {
+        return sock.sendMessage(chatId, { 
+          text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👑 BOSS BATTLES 👑
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+No bosses available at your level!
+
+Keep grinding and level up! 💪
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+        });
+      }
+
+      let bossListText = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👑 AVAILABLE BOSSES 👑
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your Level: ${player.level}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+      availableBosses.forEach((boss, index) => {
+        bossListText += `${index + 1}. ${boss.emoji} ${boss.name}\n`;
+        bossListText += `   📊 Rank: ${boss.rank}\n`;
+        bossListText += `   ⚔ Level: ${boss.minLevel}\n`;
+        bossListText += `   💰 Rewards: ~${boss.baseGoldReward || 200}g\n\n`;
+      });
+
+      bossListText += `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 Use /boss fight to battle!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      return sock.sendMessage(chatId, { text: bossListText });
+    }
+
+    // ============================================
+    // SUB-COMMAND: /boss fight
+    // ============================================
+    if (subCommand === 'fight' || !subCommand) {
+      // Check if player is alive
+      if (player.stats.hp <= 0) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You are dead! Use a revive token or heal first.' 
+        });
+      }
+
+      // Check cooldown
+      if (player.bossCooldown && Date.now() < player.bossCooldown) {
+        const timeLeft = Math.ceil((player.bossCooldown - Date.now()) / 1000 / 60);
+        return sock.sendMessage(chatId, { 
+          text: `⏰ Boss cooldown active!\n\nTime remaining: ${timeLeft} minutes` 
+        });
+      }
+
+      // Check if already in boss battle
+      if (player.inBossBattle) {
+        const battle = player.currentBossBattle;
+        const boss = battle.boss;
+        
+        const hpBar = BarSystem.getHPBar(player.stats.hp, player.stats.maxHp);
+        const energyBar = BarSystem.getEnergyBar(player.stats.energy, player.stats.maxEnergy, className);
+        const bossHPBar = BarSystem.getMonsterHPBar(boss);
+        const playerStatus = StatusEffectManager.formatStatus(player);
+        const bossStatus = StatusEffectManager.formatStatus(boss);
+
+        const menu = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔️ BOSS BATTLE IN PROGRESS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👤 ${player.name}
+❤️ HP: ${player.stats.hp}/${player.stats.maxHp}
+${hpBar}
+${playerStatus ? '💫 ' + playerStatus : ''}
+
+${player.energyColor || '💙'} ${player.energyType || 'Energy'}: ${player.stats.energy}/${player.stats.maxEnergy}
+${energyBar}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${boss.emoji} ${boss.name}
+${bossHPBar}
+${bossStatus ? '💫 ' + bossStatus : ''}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 COMMANDS
+/boss attack - Basic attack
+/boss use [skill name] - Use skill
+/boss flee - Retreat (lose HP)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+        return sock.sendMessage(chatId, { text: menu });
+      }
+
+      // Get available bosses
+      const availableBosses = BossManager.getAvailableBosses(player.level);
+      
+      if (availableBosses.length === 0) {
+        return sock.sendMessage(chatId, { 
+          text: `❌ No bosses available at Level ${player.level}!\n\nKeep leveling up! 💪` 
+        });
+      }
+
+      // Select random boss
+      const selectedBoss = availableBosses[Math.floor(Math.random() * availableBosses.length)];
+      const boss = BossManager.generateBoss(selectedBoss, player.level);
+
+      // Initialize status effects
+      if (!boss.statusEffects) boss.statusEffects = [];
+      if (!player.statusEffects) player.statusEffects = [];
+
+      // Initialize boss battle
+      player.inBossBattle = true;
+      player.currentBossBattle = {
+        boss: boss,
+        turn: 1,
+        playerDamageDealt: 0,
+        bossDamageDealt: 0,
+        startTime: Date.now()
+      };
+
+      // Set cooldown (15 minutes)
+      player.bossCooldown = Date.now() + (15 * 60 * 1000);
+
+      saveDatabase();
+
+      const bossHPBar = BarSystem.getMonsterHPBar(boss);
+      const playerHPBar = BarSystem.getHPBar(player.stats.hp, player.stats.maxHp);
+      const playerEnergyBar = BarSystem.getEnergyBar(player.stats.energy, player.stats.maxEnergy, className);
+
+      const startMessage = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨 BOSS ENCOUNTER! 🚨
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${boss.emoji} ${boss.name}
+"${boss.title}"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${bossHPBar}
+
+📊 Rank: ${boss.rank}
+⚔ ATK: ${boss.stats.atk}
+🛡 DEF: ${boss.stats.def}
+💥 Abilities: ${boss.abilities.join(', ')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👤 ${player.name}
+❤️ HP: ${player.stats.hp}/${player.stats.maxHp}
+${playerHPBar}
+
+${player.energyColor || '💙'} ${player.energyType || 'Energy'}: ${player.stats.energy}/${player.stats.maxEnergy}
+${playerEnergyBar}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 COMMANDS
+/boss attack
+/boss use [skill name]
+/boss flee
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      return sock.sendMessage(chatId, { text: startMessage });
+    }
+
+    // ============================================
+    // SUB-COMMAND: /boss use [skill]
+    // ============================================
+    if (subCommand === 'use') {
+      if (!player.inBossBattle) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You are not in a boss battle!' 
+        });
+      }
+
+      const skillName = args.slice(1).join(' ').toLowerCase();
+      if (!skillName) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ Specify a skill! Example: /boss use fireball' 
+        });
+      }
+
+      const battle = player.currentBossBattle;
+      const boss = battle.boss;
+
+      // Process player status effects first
+      const playerEffects = StatusEffectManager.processTurnEffects(player);
+      let battleMessage = '';
+      
+      if (playerEffects.messages.length > 0) {
+        battleMessage += playerEffects.messages.join('\n') + '\n\n';
+      }
+
+      if (!playerEffects.canAct) {
+        battleMessage += `❌ ${player.name} cannot act this turn!`;
+        return sock.sendMessage(chatId, { text: battleMessage });
+      }
+
+      // Check if player died from status effects
+      if (player.stats.hp <= 0) {
+        return handleBossDefeat(sock, chatId, player, boss, battle, db, saveDatabase);
+      }
+
+      // Format entities with status effects
+      const playerEntity = {
+        name: player.name,
+        stats: { ...player.stats },
+        skills: player.skills,
+        class: { name: className },
+        energyType: player.energyType || 'Energy',
+        energyColor: player.energyColor || '💙',
+        statusEffects: player.statusEffects || []
+      };
+
+      const bossEntity = {
+        name: boss.name,
+        stats: { ...boss.stats },
+        skills: {},
+        abilities: boss.abilities || [],
+        statusEffects: boss.statusEffects || []
+      };
+
+      // Execute skill
+      const result = ImprovedCombat.executeSkill(playerEntity, bossEntity, skillName);
+
+      if (!result.success) {
+        return sock.sendMessage(chatId, { 
+          text: `❌ ${result.message}` 
+        });
+      }
+
+      // Update stats
+      player.stats = playerEntity.stats;
+      player.statusEffects = playerEntity.statusEffects;
+      boss.stats = bossEntity.stats;
+      boss.statusEffects = bossEntity.statusEffects;
+      battle.turn++;
+      battle.playerDamageDealt += result.damage || 0;
+
+      battleMessage += result.message + '\n\n';
+
+      // Check if boss defeated
+      if (boss.stats.hp <= 0) {
+        return handleBossVictory(sock, chatId, player, boss, battle, db, saveDatabase, sender);
+      }
+
+      // Process boss status effects
+      const bossEffects = StatusEffectManager.processTurnEffects(boss);
+      if (bossEffects.messages.length > 0) {
+        battleMessage += bossEffects.messages.join('\n') + '\n\n';
+      }
+
+      // Check if boss died from status effects
+      if (boss.stats.hp <= 0) {
+        return handleBossVictory(sock, chatId, player, boss, battle, db, saveDatabase, sender);
+      }
+
+      // Boss can attack if not stunned/frozen
+      if (bossEffects.canAct) {
+        const bossAction = executeBossAI(boss, player);
+        battleMessage += bossAction.message + '\n\n';
+        battle.bossDamageDealt += bossAction.damage || 0;
+
+        // Check if player defeated
+        if (player.stats.hp <= 0) {
+          return handleBossDefeat(sock, chatId, player, boss, battle, db, saveDatabase);
+        }
+      }
+
+      saveDatabase();
+
+      // Show updated status with bars
+      const playerHPBar = BarSystem.getHPBar(player.stats.hp, player.stats.maxHp);
+      const playerEnergyBar = BarSystem.getEnergyBar(player.stats.energy, player.stats.maxEnergy, className);
+      const bossHPBar = BarSystem.getMonsterHPBar(boss);
+      const playerStatus = StatusEffectManager.formatStatus(player);
+      const bossStatus = StatusEffectManager.formatStatus(boss);
+
+      battleMessage += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+      battleMessage += `👤 ${player.name}\n`;
+      battleMessage += `❤️ HP: ${player.stats.hp}/${player.stats.maxHp}\n`;
+      battleMessage += `${playerHPBar}\n`;
+      if (playerStatus) battleMessage += `💫 ${playerStatus}\n`;
+      battleMessage += `\n${player.energyColor || '💙'} ${player.energyType || 'Energy'}: ${player.stats.energy}/${player.stats.maxEnergy}\n`;
+      battleMessage += `${playerEnergyBar}\n\n`;
+      battleMessage += `${boss.emoji} ${boss.name}\n`;
+      battleMessage += `${bossHPBar}\n`;
+      if (bossStatus) battleMessage += `💫 ${bossStatus}\n`;
+      battleMessage += `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      return sock.sendMessage(chatId, { text: battleMessage });
+    }
+
+    // ============================================
+    // SUB-COMMAND: /boss attack
+    // ============================================
+    if (subCommand === 'attack') {
+      if (!player.inBossBattle) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You are not in a boss battle!' 
+        });
+      }
+
+      const battle = player.currentBossBattle;
+      const boss = battle.boss;
+
+      // Process player status effects
+      const playerEffects = StatusEffectManager.processTurnEffects(player);
+      let battleMessage = '';
+      
+      if (playerEffects.messages.length > 0) {
+        battleMessage += playerEffects.messages.join('\n') + '\n\n';
+      }
+
+      if (!playerEffects.canAct) {
+        battleMessage += `❌ ${player.name} cannot act this turn!`;
+        return sock.sendMessage(chatId, { text: battleMessage });
+      }
+
+      if (player.stats.hp <= 0) {
+        return handleBossDefeat(sock, chatId, player, boss, battle, db, saveDatabase);
+      }
+
+      // Calculate damage with stat modifiers
+      const modifiers = StatusEffectManager.getStatModifiers(player);
+      const weaponAtk = player.weapon?.bonus || 0;
+      const effectiveAtk = Math.floor((player.stats.atk + weaponAtk) * modifiers.atkMod);
+      const damage = Math.max(1, effectiveAtk - Math.floor(boss.stats.def * 0.5));
+
+      boss.stats.hp -= damage;
+      battle.turn++;
+      battle.playerDamageDealt += damage;
+
+      battleMessage += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+      battleMessage += `⚔ ${player.name} attacks!\n`;
+      battleMessage += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+      battleMessage += `💥 Dealt ${damage} damage!\n\n`;
+
+      // Check if boss defeated
+      if (boss.stats.hp <= 0) {
+        return handleBossVictory(sock, chatId, player, boss, battle, db, saveDatabase, sender);
+      }
+
+      // Process boss status effects
+      const bossEffects = StatusEffectManager.processTurnEffects(boss);
+      if (bossEffects.messages.length > 0) {
+        battleMessage += bossEffects.messages.join('\n') + '\n\n';
+      }
+
+      if (boss.stats.hp <= 0) {
+        return handleBossVictory(sock, chatId, player, boss, battle, db, saveDatabase, sender);
+      }
+
+      // Boss counter-attack if can act
+      if (bossEffects.canAct) {
+        const bossAction = executeBossAI(boss, player);
+        battleMessage += bossAction.message + '\n\n';
+        battle.bossDamageDealt += bossAction.damage || 0;
+
+        if (player.stats.hp <= 0) {
+          return handleBossDefeat(sock, chatId, player, boss, battle, db, saveDatabase);
+        }
+      }
+
+      saveDatabase();
+
+      // Show updated status
+      const playerHPBar = BarSystem.getHPBar(player.stats.hp, player.stats.maxHp);
+      const playerEnergyBar = BarSystem.getEnergyBar(player.stats.energy, player.stats.maxEnergy, className);
+      const bossHPBar = BarSystem.getMonsterHPBar(boss);
+      const playerStatus = StatusEffectManager.formatStatus(player);
+      const bossStatus = StatusEffectManager.formatStatus(boss);
+
+      battleMessage += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+      battleMessage += `👤 ${player.name}\n`;
+      battleMessage += `❤️ HP: ${player.stats.hp}/${player.stats.maxHp}\n`;
+      battleMessage += `${playerHPBar}\n`;
+      if (playerStatus) battleMessage += `💫 ${playerStatus}\n`;
+      battleMessage += `\n${player.energyColor || '💙'} ${player.energyType || 'Energy'}: ${player.stats.energy}/${player.stats.maxEnergy}\n`;
+      battleMessage += `${playerEnergyBar}\n\n`;
+      battleMessage += `${boss.emoji} ${boss.name}\n`;
+      battleMessage += `${bossHPBar}\n`;
+      if (bossStatus) battleMessage += `💫 ${bossStatus}\n`;
+      battleMessage += `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      return sock.sendMessage(chatId, { text: battleMessage });
+    }
+
+    // ============================================
+    // SUB-COMMAND: /boss flee
+    // ============================================
+    if (subCommand === 'flee') {
+      if (!player.inBossBattle) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You are not in a boss battle!' 
+        });
+      }
+
+      const fleeHp = Math.floor(player.stats.maxHp * 0.3);
+      player.stats.hp = Math.max(1, player.stats.hp - fleeHp);
+      player.inBossBattle = false;
+      player.currentBossBattle = null;
+      saveDatabase();
+
+      const hpBar = BarSystem.getHPBar(player.stats.hp, player.stats.maxHp);
+
+      return sock.sendMessage(chatId, { 
+        text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏃 FLED FROM BOSS!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Lost ${fleeHp} HP from exhaustion
+
+❤️ HP: ${player.stats.hp}/${player.stats.maxHp}
+${hpBar}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ Boss cooldown reset.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+      });
+    }
+
+    // Default: Show help
+    return sock.sendMessage(chatId, { 
+      text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👑 BOSS BATTLES 👑
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/boss list - View bosses
+/boss fight - Start battle
+/boss attack - Basic attack
+/boss use [skill] - Use skill
+/boss flee - Retreat
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+    });
+  }
+};
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+function executeBossAI(boss, player) {
+  // Bosses use skills more frequently based on rank
+  const skillChance = {
+    'F': 0.5,
+    'E': 0.6,
+    'D': 0.7,
+    'C': 0.75,
+    'B': 0.8,
+    'A': 0.85,
+    'S': 0.9,
+    'SS': 0.95,
+    'National': 1.0,
+    'Beyond': 1.0
+  };
+
+  const useSkill = Math.random() < (skillChance[boss.rank] || 0.5);
+
+  if (useSkill && boss.abilities.length > 0) {
+    const ability = boss.abilities[Math.floor(Math.random() * boss.abilities.length)];
+    
+    // Map abilities to status effects
+    let statusEffect = null;
+    let damageMultiplier = 1.8;
+    
+    const abilityLower = ability.toLowerCase();
+    
+    if (abilityLower.includes('poison') || abilityLower.includes('venom') || abilityLower.includes('toxic')) {
+      statusEffect = 'poison';
+    } else if (abilityLower.includes('burn') || abilityLower.includes('fire') || abilityLower.includes('flame') || abilityLower.includes('inferno')) {
+      statusEffect = 'burn';
+      damageMultiplier = 2.0;
+    } else if (abilityLower.includes('freeze') || abilityLower.includes('ice') || abilityLower.includes('frost') || abilityLower.includes('blizzard')) {
+      statusEffect = 'freeze';
+      damageMultiplier = 1.5;
+    } else if (abilityLower.includes('stun') || abilityLower.includes('paralyze') || abilityLower.includes('shock')) {
+      statusEffect = 'stun';
+      damageMultiplier = 1.6;
+    } else if (abilityLower.includes('bleed') || abilityLower.includes('slash') || abilityLower.includes('rend')) {
+      statusEffect = 'bleed';
+    } else if (abilityLower.includes('curse') || abilityLower.includes('hex') || abilityLower.includes('weaken')) {
+      statusEffect = 'weaken';
+    } else if (abilityLower.includes('slow')) {
+      statusEffect = 'slow';
+    }
+    
+    // FIXED DAMAGE CALCULATION
+    const baseDamage = Math.floor(boss.stats.atk * damageMultiplier);
+    const defReduction = Math.floor(player.stats.def * 0.3); // 30% defense, not 50%
+    const finalDamage = Math.max(10, baseDamage - defReduction); // Minimum 10 damage for bosses
+    
+    player.stats.hp -= finalDamage;
+    
+    let message = `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `${boss.emoji} ${boss.name} used ${ability}!\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `💥 You take ${finalDamage} damage!\n`;
+    
+    // Higher chance for status effect application
+    const statusChance = boss.rank === 'F' ? 0.5 : boss.rank === 'E' ? 0.6 : boss.rank === 'D' ? 0.7 : 0.8;
+    
+    if (statusEffect && Math.random() < statusChance) {
+      StatusEffectManager.applyEffect(player, statusEffect);
+      const effectData = StatusEffectManager.EFFECTS[statusEffect];
+      message += `${effectData.emoji} You are now ${effectData.name}!\n`;
+    }
+    
+    message += `❤ Your HP: ${Math.max(0, player.stats.hp)}/${player.stats.maxHp}\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    
+    return { damage: finalDamage, message };
+  } else {
+    // Basic attack - FIXED DAMAGE CALCULATION
+    const baseDamage = boss.stats.atk;
+    const defReduction = Math.floor(player.stats.def * 0.3); // 30% defense
+    const finalDamage = Math.max(5, baseDamage - defReduction); // Minimum 5 damage
+    
+    player.stats.hp -= finalDamage;
+
+    return {
+      damage: finalDamage,
+      message: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${boss.emoji} ${boss.name} attacks!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💥 You take ${finalDamage} damage!
+❤ Your HP: ${Math.max(0, player.stats.hp)}/${player.stats.maxHp}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+    };
+  }
+}
+
+function handleBossVictory(sock, chatId, player, boss, battle, db, saveDatabase, sender) {
+  // Calculate rewards
+  const rewards = BossManager.calculateBossRewards(boss, player.level);
+
+  // Apply rewards
+  player.xp = (player.xp || 0) + rewards.xp;
+  player.manaCrystals = (player.manaCrystals || 0) + rewards.crystals;
+  
+  // Initialize gold if needed
+  if (typeof player.gold !== 'number') {
+    player.gold = 0;
+  }
+  
+  // Add gold directly
+  player.gold += rewards.gold;
+  
+  // Sync inventory gold
+  if (!player.inventory) player.inventory = {};
+  player.inventory.gold = player.gold;
+
+  // Track bosses for rank progression
+  if (!player.bossesDefeated) {
+    player.bossesDefeated = {
+      total: 0,
+      byRank: { F: 0, E: 0, D: 0, C: 0, B: 0, A: 0, S: 0, SS: 0, National: 0, Beyond: 0 }
+    };
+  }
+  player.bossesDefeated.total++;
+  player.bossesDefeated.byRank[boss.rank] = (player.bossesDefeated.byRank[boss.rank] || 0) + 1;
+
+  // Generate loot
+  const loot = BossManager.generateBossLoot(boss, player.level);
+  let lootMessage = '';
+  
+  if (loot && loot.length > 0) {
+    player.inventory = player.inventory || { items: [] };
+    player.inventory.items = player.inventory.items || [];
+    
+    loot.forEach(item => {
+      player.inventory.items.push(item);
+      lootMessage += `\n🎁 ${item.name} (${item.rarity})`;
+    });
+  }
+
+  // Clear battle and status effects
+  player.inBossBattle = false;
+  player.currentBossBattle = null;
+  player.statusEffects = [];
+
+  saveDatabase();
+
+  // Check level ups
+  if (LevelUpManager && LevelUpManager.checkAndApplyLevelUps) {
+    LevelUpManager.checkAndApplyLevelUps(player, saveDatabase, sock, chatId);
+  }
+
+  const victoryMessage = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏆 BOSS DEFEATED! 🏆
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${boss.emoji} ${boss.name} has fallen!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎁 REWARDS:
+💫 +${rewards.xp} XP
+💎 +${rewards.crystals} Crystals
+🪙 +${rewards.gold} Gold${lootMessage}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ Cooldown: 15 minutes
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+  return sock.sendMessage(chatId, { text: victoryMessage });
+}
+
+function handleBossDefeat(sock, chatId, player, boss, battle, db, saveDatabase) {
+  const goldLoss = Math.floor((player.gold || 0) * 0.3);
+  updatePlayerGold(player, -goldLoss, saveDatabase);
+  
+  player.stats.hp = 0;
+  player.inBossBattle = false;
+  player.currentBossBattle = null;
+  player.statusEffects = [];
+  
+  saveDatabase();
+
+  return sock.sendMessage(chatId, { 
+    text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💀 DEFEAT 💀
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${boss.emoji} ${boss.name} defeated you!
+
+💰 Lost ${goldLoss} gold (30%)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Use /heal or a revive token.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+  });
+}

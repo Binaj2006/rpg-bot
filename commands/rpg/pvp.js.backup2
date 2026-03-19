@@ -1,0 +1,825 @@
+const DetailedCombat = require('../../rpg/utils/DetailedCombat');
+const StatusEffectManager = require('../../rpg/utils/StatusEffectManager');
+const BarSystem = require('../../rpg/utils/BarSystem');
+const SkillDescriptions = require('../../rpg/utils/SkillDescriptions');
+const LevelUpManager = require('../../rpg/utils/LevelUpManager');
+const { updatePlayerGold } = require('../../rpg/utils/GoldManager');
+
+// Store pending challenges (in-memory, resets on bot restart)
+const pendingChallenges = new Map();
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER: Check if player is in PvP
+// ═══════════════════════════════════════════════════════════════
+function isInPVP(player) {
+  return player && player.pvpBattle && player.pvpBattle.opponentId;
+}
+
+module.exports.isInPVP = isInPVP;
+
+module.exports.name = 'pvp';
+module.exports.description = '⚔️ Simultaneous PVP battles with status effects';
+  
+module.exports.execute = async function(sock, msg, args, getDatabase, saveDatabase, sender) {
+    const chatId = msg.key.remoteJid;
+    const db = getDatabase();
+    const player = db.users[sender];
+
+    if (!player) {
+      return sock.sendMessage(chatId, { 
+        text: '❌ Start your journey first with /start!' 
+      }, { quoted: msg });
+    }
+
+    const action = args[0]?.toLowerCase();
+
+    // ═══════════════════════════════════════════════════════════════
+    // STATUS / MENU
+    // ═══════════════════════════════════════════════════════════════
+    if (!action || action === 'status') {
+      const activeBattle = player.pvpBattle;
+      
+      const hpBar = BarSystem.getHPBar(player.stats.hp, player.stats.maxHp);
+      const className = typeof player.class === 'object' ? player.class.name : player.class;
+      const energyBar = BarSystem.getEnergyBar(
+        player.stats.energy, 
+        player.stats.maxEnergy, 
+        className
+      );
+
+      let statusMsg = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔️ PVP ARENA ⚔️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 YOUR STATUS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👤 ${player.name}
+🎭 ${className} | Lv ${player.level}
+
+❤️ HP: ${player.stats.hp}/${player.stats.maxHp}
+${hpBar}
+
+${player.energyColor || '💙'} Energy: ${player.stats.energy}/${player.stats.maxEnergy}
+${energyBar}
+
+🏆 Rank: ${player.rank || 'F'}
+⚔️ PVP Wins: ${player.pvpWins || 0}
+💀 PVP Losses: ${player.pvpLosses || 0}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+
+      if (activeBattle) {
+        const opponent = db.users[activeBattle.opponentId];
+        if (opponent) {
+          const oppClassName = typeof opponent.class === 'object' ? opponent.class.name : opponent.class;
+          const oppHPBar = BarSystem.getHPBar(opponent.stats.hp, opponent.stats.maxHp);
+          const oppEnergyBar = BarSystem.getEnergyBar(
+            opponent.stats.energy, 
+            opponent.stats.maxEnergy, 
+            oppClassName
+          );
+          
+          const hasChosen = activeBattle.pendingAction !== null;
+          const oppHasChosen = opponent.pvpBattle?.pendingAction !== null;
+          
+          statusMsg += `⚔️ ACTIVE BATTLE!\n`;
+          statusMsg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+          statusMsg += `🎮 Turn ${activeBattle.turnNumber}\n`;
+          statusMsg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+          
+          statusMsg += `👤 ${opponent.name}\n`;
+          statusMsg += `🎭 ${oppClassName} | Lv ${opponent.level}\n\n`;
+          statusMsg += `❤️ HP: ${opponent.stats.hp}/${opponent.stats.maxHp}\n`;
+          statusMsg += `${oppHPBar}\n\n`;
+          statusMsg += `${opponent.energyColor || '💙'} Energy: ${opponent.stats.energy}/${opponent.stats.maxEnergy}\n`;
+          statusMsg += `${oppEnergyBar}\n`;
+          
+          // Show status effects
+          if (opponent.statusEffects && opponent.statusEffects.length > 0) {
+            statusMsg += `\n🌀 Status: ${opponent.statusEffects.map(e => e.type.toUpperCase()).join(', ')}\n`;
+          }
+          
+          statusMsg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+          
+          if (hasChosen && !oppHasChosen) {
+            statusMsg += `✅ Action chosen! Waiting for opponent...\n`;
+          } else if (!hasChosen) {
+            statusMsg += `💡 CHOOSE YOUR ACTION!\n`;
+            statusMsg += `/pvp attack - Basic attack\n`;
+            statusMsg += `/pvp skill - View & use skills\n`;
+            statusMsg += `/pvp surrender - Give up\n`;
+          } else {
+            statusMsg += `⏳ Both players ready, processing...\n`;
+          }
+        }
+      } else {
+        statusMsg += `✅ Ready to battle!\n`;
+        statusMsg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        statusMsg += `📜 COMMANDS:\n`;
+        statusMsg += `/pvp challenge @user\n`;
+        statusMsg += `/pvp accept - Accept challenge\n`;
+        statusMsg += `/pvp decline - Decline challenge\n`;
+      }
+
+      statusMsg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      return sock.sendMessage(chatId, { text: statusMsg }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CHALLENGE PLAYER
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'challenge') {
+      const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+      if (!mentions.length) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ Mention a player to challenge!\n\nExample: /pvp challenge @player' 
+        }, { quoted: msg });
+      }
+
+      const opponentId = mentions[0];
+      if (opponentId === sender) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You cannot challenge yourself!' 
+        }, { quoted: msg });
+      }
+
+      const opponent = db.users[opponentId];
+      if (!opponent) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ That player hasn\'t started their journey!' 
+        }, { quoted: msg });
+      }
+
+      if (player.pvpBattle) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You\'re already in a battle!' 
+        }, { quoted: msg });
+      }
+
+      if (opponent.pvpBattle) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ That player is already in battle!' 
+        }, { quoted: msg });
+      }
+
+      if (player.stats.hp < player.stats.maxHp * 0.5) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You need at least 50% HP to challenge! Use /heal first.' 
+        }, { quoted: msg });
+      }
+
+      if (opponent.stats.hp < opponent.stats.maxHp * 0.5) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ That player needs to heal before accepting challenges!' 
+        }, { quoted: msg });
+      }
+
+      pendingChallenges.set(opponentId, {
+        challengerId: sender,
+        challengerName: player.name,
+        opponentId: opponentId,
+        opponentName: opponent.name,
+        timestamp: Date.now(),
+        chatId: chatId
+      });
+
+      setTimeout(() => {
+        if (pendingChallenges.has(opponentId)) {
+          pendingChallenges.delete(opponentId);
+        }
+      }, 60000);
+
+      const playerClassName = typeof player.class === 'object' ? player.class.name : player.class;
+      const oppClassName = typeof opponent.class === 'object' ? opponent.class.name : opponent.class;
+
+      return sock.sendMessage(chatId, { 
+        text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔️ PVP CHALLENGE! ⚔️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👤 ${player.name} (${playerClassName} Lv.${player.level})
+     challenges
+👤 ${opponent.name} (${oppClassName} Lv.${opponent.level})
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@${opponentId.split('@')[0]} - You have 60 seconds to respond!
+
+✅ /pvp accept - Accept the challenge
+❌ /pvp decline - Decline the challenge
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+        mentions: [opponentId]
+      }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ACCEPT CHALLENGE
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'accept') {
+      const challenge = pendingChallenges.get(sender);
+      
+      if (!challenge) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You have no pending challenges!' 
+        }, { quoted: msg });
+      }
+
+      const challenger = db.users[challenge.challengerId];
+      if (!challenger) {
+        pendingChallenges.delete(sender);
+        return sock.sendMessage(chatId, { 
+          text: '❌ Challenger not found!' 
+        }, { quoted: msg });
+      }
+
+      pendingChallenges.delete(sender);
+
+      // Initialize status effects
+      if (!player.statusEffects) player.statusEffects = [];
+      if (!challenger.statusEffects) challenger.statusEffects = [];
+
+      // Initialize battle for both players
+      player.pvpBattle = {
+        opponentId: challenge.challengerId,
+        turnNumber: 1,
+        pendingAction: null,
+        startTime: Date.now(),
+        chatId: chatId
+      };
+
+      challenger.pvpBattle = {
+        opponentId: sender,
+        turnNumber: 1,
+        pendingAction: null,
+        startTime: Date.now(),
+        chatId: chatId
+      };
+
+      saveDatabase();
+
+      const playerClassName = typeof player.class === 'object' ? player.class.name : player.class;
+      const challClassName = typeof challenger.class === 'object' ? challenger.class.name : challenger.class;
+      
+      const playerHPBar = BarSystem.getHPBar(player.stats.hp, player.stats.maxHp);
+      const playerEnergyBar = BarSystem.getEnergyBar(player.stats.energy, player.stats.maxEnergy, playerClassName);
+      const challHPBar = BarSystem.getHPBar(challenger.stats.hp, challenger.stats.maxHp);
+      const challEnergyBar = BarSystem.getEnergyBar(challenger.stats.energy, challenger.stats.maxEnergy, challClassName);
+
+      return sock.sendMessage(chatId, { 
+        text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔️ PVP BATTLE START! ⚔️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👤 ${challenger.name}
+🎭 ${challClassName} | Lv ${challenger.level}
+❤️ HP: ${challenger.stats.hp}/${challenger.stats.maxHp}
+${challHPBar}
+${challenger.energyColor || '💙'} Energy: ${challenger.stats.energy}/${challenger.stats.maxEnergy}
+${challEnergyBar}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👤 ${player.name}
+🎭 ${playerClassName} | Lv ${player.level}
+❤️ HP: ${player.stats.hp}/${player.stats.maxHp}
+${playerHPBar}
+${player.energyColor || '💙'} Energy: ${player.stats.energy}/${player.stats.maxEnergy}
+${playerEnergyBar}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎮 TURN 1 - BOTH PLAYERS CHOOSE!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@${challenge.challengerId.split('@')[0]} - Choose your move!
+@${sender.split('@')[0]} - Choose your move!
+
+/pvp attack - Basic attack
+/pvp skill - Use a skill
+/pvp surrender - Give up
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+        mentions: [challenge.challengerId, sender]
+      }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // DECLINE CHALLENGE
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'decline') {
+      const challenge = pendingChallenges.get(sender);
+      
+      if (!challenge) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You have no pending challenges!' 
+        }, { quoted: msg });
+      }
+
+      pendingChallenges.delete(sender);
+
+      return sock.sendMessage(chatId, { 
+        text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ CHALLENGE DECLINED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${player.name} declined the challenge from ${challenge.challengerName}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+      }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ATTACK - Store action and check if both ready
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'attack') {
+      const battle = player.pvpBattle;
+      if (!battle) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ No active PVP battle! Use /pvp challenge @player first.' 
+        }, { quoted: msg });
+      }
+
+      if (battle.pendingAction) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You\'ve already chosen your action! Waiting for opponent...' 
+        }, { quoted: msg });
+      }
+
+      const opponent = db.users[battle.opponentId];
+      if (!opponent) {
+        player.pvpBattle = null;
+        saveDatabase();
+        return sock.sendMessage(chatId, { 
+          text: '❌ Opponent not found! Battle ended.' 
+        }, { quoted: msg });
+      }
+
+      // Store action (don't reveal what was chosen!)
+      battle.pendingAction = { type: 'attack' };
+      saveDatabase();
+
+      // Check if opponent has also chosen
+      if (opponent.pvpBattle?.pendingAction) {
+        // Both ready! Execute both actions
+        return executeBothActions(sock, chatId, player, opponent, db, saveDatabase, sender);
+      } else {
+        // Wait for opponent (don't reveal choice!)
+        return sock.sendMessage(chatId, { 
+          text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ ACTION CHOSEN!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏳ Waiting for ${opponent.name} to choose their action...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+        }, { quoted: msg });
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SKILL MENU
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'skill' || action === 'skills') {
+      const battle = player.pvpBattle;
+      if (!battle) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ No active PVP battle!' 
+        }, { quoted: msg });
+      }
+
+      const skillsMenu = DetailedCombat.getDetailedSkillsMenu(player);
+      
+      return sock.sendMessage(chatId, { text: skillsMenu }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // USE SKILL - Store action and check if both ready
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'use') {
+      const battle = player.pvpBattle;
+      if (!battle) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ No active PVP battle!' 
+        }, { quoted: msg });
+      }
+
+      if (battle.pendingAction) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You\'ve already chosen your action! Waiting for opponent...' 
+        }, { quoted: msg });
+      }
+
+      const opponent = db.users[battle.opponentId];
+      if (!opponent) {
+        player.pvpBattle = null;
+        saveDatabase();
+        return sock.sendMessage(chatId, { 
+          text: '❌ Opponent not found! Battle ended.' 
+        }, { quoted: msg });
+      }
+
+      const skillIndex = parseInt(args[1]) - 1;
+      
+      if (isNaN(skillIndex)) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ Specify skill number!\n\nExample: /pvp use 1' 
+        }, { quoted: msg });
+      }
+
+      const skill = player.skills?.active?.[skillIndex];
+      if (!skill) {
+        return sock.sendMessage(chatId, { 
+          text: `❌ Invalid skill number!\n\nUse /pvp skill to see your skills.` 
+        }, { quoted: msg });
+      }
+
+      if (player.stats.energy < skill.energyCost) {
+        return sock.sendMessage(chatId, { 
+          text: `❌ Not enough ${player.energyType || 'Energy'}! Need ${skill.energyCost}, have ${player.stats.energy}.` 
+        }, { quoted: msg });
+      }
+
+      // Store action (don't reveal what was chosen!)
+      battle.pendingAction = { type: 'skill', skillIndex: skillIndex };
+      saveDatabase();
+
+      // Check if opponent has also chosen
+      if (opponent.pvpBattle?.pendingAction) {
+        // Both ready! Execute both actions
+        return executeBothActions(sock, chatId, player, opponent, db, saveDatabase, sender);
+      } else {
+        // Wait for opponent (don't reveal choice!)
+        return sock.sendMessage(chatId, { 
+          text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ ACTION CHOSEN!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏳ Waiting for ${opponent.name} to choose their action...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+        }, { quoted: msg });
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SURRENDER
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'surrender') {
+      if (!player.pvpBattle) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ No active PVP battle!' 
+        }, { quoted: msg });
+      }
+
+      const opponent = db.users[player.pvpBattle.opponentId];
+      
+      let surrenderMsg = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏳️ SURRENDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${player.name} has surrendered!
+
+`;
+
+      if (opponent) {
+        opponent.pvpWins = (opponent.pvpWins || 0) + 1;
+        opponent.pvpBattle = null;
+        opponent.statusEffects = [];
+        updatePlayerGold(opponent, 100, saveDatabase);
+        surrenderMsg += `🏆 ${opponent.name} wins by default!\n`;
+        surrenderMsg += `💰 ${opponent.name} received 100g\n`;
+      }
+
+      player.pvpBattle = null;
+      player.pvpLosses = (player.pvpLosses || 0) + 1;
+      player.stats.hp = Math.floor(player.stats.maxHp * 0.3);
+      player.statusEffects = [];
+
+      surrenderMsg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      saveDatabase();
+      return sock.sendMessage(chatId, { text: surrenderMsg }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // INVALID COMMAND
+    // ═══════════════════════════════════════════════════════════════
+    return sock.sendMessage(chatId, { 
+      text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ INVALID PVP COMMAND
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📜 AVAILABLE COMMANDS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/pvp status - View battle status
+/pvp challenge @user - Challenge player
+/pvp accept - Accept challenge
+/pvp decline - Decline challenge
+/pvp attack - Basic attack (in battle)
+/pvp skill - View skills (in battle)
+/pvp use [#] - Use skill (in battle)
+/pvp surrender - Give up (in battle)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+    }, { quoted: msg });
+};
+
+// ═══════════════════════════════════════════════════════════════
+// EXECUTE BOTH ACTIONS SIMULTANEOUSLY
+// ═══════════════════════════════════════════════════════════════
+async function executeBothActions(sock, chatId, player1, player2, db, saveDatabase, initiatorId) {
+  const p1Action = player1.pvpBattle.pendingAction;
+  const p2Action = player2.pvpBattle.pendingAction;
+  
+  // Get player IDs
+  const p1Id = Object.keys(db.users).find(id => db.users[id] === player1);
+  const p2Id = Object.keys(db.users).find(id => db.users[id] === player2);
+  
+  // Calculate both actions
+  const p1Result = calculateAction(player1, player2, p1Action);
+  const p2Result = calculateAction(player2, player1, p2Action);
+  
+  // Apply damage simultaneously
+  player2.stats.hp = Math.max(0, player2.stats.hp - p1Result.damage);
+  player1.stats.hp = Math.max(0, player1.stats.hp - p2Result.damage);
+  
+  // Apply energy costs
+  if (p1Result.energyCost) player1.stats.energy = Math.max(0, player1.stats.energy - p1Result.energyCost);
+  if (p2Result.energyCost) player2.stats.energy = Math.max(0, player2.stats.energy - p2Result.energyCost);
+  
+  // Apply status effects
+  if (p1Result.statusEffect) {
+    applyStatusEffect(player2, p1Result.statusEffect);
+  }
+  if (p2Result.statusEffect) {
+    applyStatusEffect(player1, p2Result.statusEffect);
+  }
+  
+  // Build combined result message
+  let resultMsg = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔️ TURN ${player1.pvpBattle.turnNumber} - ACTIONS RESOLVING!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  
+  // Determine order by speed (faster goes first in display)
+  const p1Speed = player1.stats.speed || 100;
+  const p2Speed = player2.stats.speed || 100;
+  
+  const results = p1Speed >= p2Speed ? 
+    [{player: player1, result: p1Result, target: player2}, {player: player2, result: p2Result, target: player1}] :
+    [{player: player2, result: p2Result, target: player1}, {player: player1, result: p1Result, target: player2}];
+  
+  // Show both actions
+  for (const {player, result, target} of results) {
+    resultMsg += `👤 ${player.name}'s Action:\n`;
+    resultMsg += result.narrative;
+    resultMsg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  }
+  
+  // Process status effect damage
+  const p1StatusDmg = processStatusEffects(player1);
+  const p2StatusDmg = processStatusEffects(player2);
+  
+  if (p1StatusDmg > 0 || p2StatusDmg > 0) {
+    resultMsg += `🌀 STATUS EFFECT DAMAGE:\n`;
+    if (p1StatusDmg > 0) resultMsg += `💀 ${player1.name} took ${p1StatusDmg} from status effects!\n`;
+    if (p2StatusDmg > 0) resultMsg += `💀 ${player2.name} took ${p2StatusDmg} from status effects!\n`;
+    resultMsg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  }
+  
+  // Show battle status
+  resultMsg += getBattleStatus(player1, player2);
+  
+  // Clear actions and increment turn
+  player1.pvpBattle.pendingAction = null;
+  player2.pvpBattle.pendingAction = null;
+  player1.pvpBattle.turnNumber++;
+  player2.pvpBattle.turnNumber++;
+  
+  saveDatabase();
+  
+  // Send the battle results FIRST
+  await sock.sendMessage(chatId, { 
+    text: resultMsg,
+    mentions: [p1Id, p2Id]
+  });
+  
+  // THEN check for victory (so player sees what killed them)
+  if (player1.stats.hp <= 0 || player2.stats.hp <= 0) {
+    const winner = player1.stats.hp > 0 ? player1 : player2;
+    const loser = player1.stats.hp > 0 ? player2 : player1;
+    return handlePVPVictory(sock, chatId, winner, loser, db, saveDatabase);
+  }
+  
+  // If battle continues, send next turn prompt
+  const nextTurnMsg = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎮 TURN ${player1.pvpBattle.turnNumber} - CHOOSE YOUR ACTION!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@${p1Id.split('@')[0]} - Choose your move!
+@${p2Id.split('@')[0]} - Choose your move!
+
+/pvp attack - Basic attack
+/pvp skill - Use a skill
+/pvp surrender - Give up
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  
+  return sock.sendMessage(chatId, { 
+    text: nextTurnMsg,
+    mentions: [p1Id, p2Id]
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CALCULATE SINGLE ACTION
+// ═══════════════════════════════════════════════════════════════
+function calculateAction(attacker, defender, action) {
+  const className = typeof attacker.class === 'object' ? attacker.class.name : attacker.class;
+  
+  if (action.type === 'attack') {
+    // Basic attack
+    const isCrit = Math.random() < 0.15;
+    const weaponAtk = attacker.weapon?.attack || attacker.weapon?.bonus || 0;
+    const baseDamage = attacker.stats.atk + weaponAtk;
+    let damage = isCrit ? Math.floor(baseDamage * 1.5) : baseDamage;
+    
+    const defReduction = Math.floor(defender.stats.def * 0.3);
+    damage = Math.max(10, damage - defReduction);
+    
+    const narrative = `⚔️ ${attacker.name} used Basic Attack!\n${isCrit ? '💥 CRITICAL HIT!\n' : ''}━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💥 Dealt ${damage} damage to ${defender.name}!`;
+    
+    return { damage, narrative, energyCost: 0, statusEffect: null };
+  } else if (action.type === 'skill') {
+    // Skill attack
+    const skill = attacker.skills?.active?.[action.skillIndex];
+    if (!skill) return { damage: 0, narrative: '❌ Skill not found!', energyCost: 0, statusEffect: null };
+    
+    const skillData = SkillDescriptions.getSkillDescription(skill.name);
+    
+    const weaponBonus = attacker.weapon?.bonus || attacker.weapon?.attack || 0;
+    let baseDamage = Math.floor((skill.damage + weaponBonus) * 1.5);
+    
+    const isCrit = Math.random() < 0.2;
+    if (isCrit) baseDamage = Math.floor(baseDamage * 1.8);
+    
+    const defReduction = Math.floor(defender.stats.def * 0.3);
+    const finalDamage = Math.max(15, baseDamage - defReduction);
+    
+    let narrative = `✨ ${attacker.name} used ${skill.name}!\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    
+    // Use animation from SkillDescriptions
+    if (skillData && skillData.animation) {
+      narrative += skillData.animation + '\n';
+    } else {
+      narrative += `✨ You channel your power...\n💥 The attack connects!\n⚡ Devastating impact!\n`;
+    }
+    
+    narrative += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    if (isCrit) narrative += `💥 CRITICAL HIT!\n`;
+    narrative += `💥 Dealt ${finalDamage} damage to ${defender.name}!\n`;
+    narrative += `💙 ${attacker.energyType || 'Energy'}: ${attacker.stats.energy - skill.energyCost}/${attacker.stats.maxEnergy}`;
+    
+    // Determine status effect from skill
+    let statusEffect = null;
+    if (skill.name.toLowerCase().includes('poison')) {
+      statusEffect = { type: 'poison', duration: 3, damage: Math.floor(defender.stats.maxHp * 0.08) };
+      narrative += `\n🧪 ${defender.name} is now POISONED!`;
+    } else if (skill.name.toLowerCase().includes('fire') || skill.name.toLowerCase().includes('burn')) {
+      statusEffect = { type: 'burn', duration: 3, damage: Math.floor(defender.stats.maxHp * 0.05) };
+      narrative += `\n🔥 ${defender.name} is now BURNING!`;
+    } else if (skill.name.toLowerCase().includes('ice') || skill.name.toLowerCase().includes('freeze')) {
+      statusEffect = { type: 'freeze', duration: 1 };
+      narrative += `\n❄️ ${defender.name} is now FROZEN!`;
+    }
+    
+    return { damage: finalDamage, narrative, energyCost: skill.energyCost, statusEffect };
+  }
+  
+  return { damage: 0, narrative: '', energyCost: 0, statusEffect: null };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// APPLY STATUS EFFECT
+// ═══════════════════════════════════════════════════════════════
+function applyStatusEffect(player, effect) {
+  if (!effect) return;
+  
+  if (!player.statusEffects) player.statusEffects = [];
+  
+  // Check if already has this effect
+  const existing = player.statusEffects.find(e => e.type === effect.type);
+  if (existing) {
+    // Refresh duration
+    existing.duration = Math.max(existing.duration, effect.duration);
+    if (effect.damage) existing.damage = effect.damage;
+  } else {
+    player.statusEffects.push({...effect});
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PROCESS STATUS EFFECTS (damage and tick down)
+// ═══════════════════════════════════════════════════════════════
+function processStatusEffects(player) {
+  if (!player.statusEffects || player.statusEffects.length === 0) return 0;
+  
+  let totalDamage = 0;
+  
+  player.statusEffects = player.statusEffects.filter(effect => {
+    if (effect.type === 'poison' || effect.type === 'burn') {
+      const dmg = effect.damage || 10;
+      player.stats.hp = Math.max(0, player.stats.hp - dmg);
+      totalDamage += dmg;
+    }
+    
+    effect.duration--;
+    return effect.duration > 0;
+  });
+  
+  return totalDamage;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GET BATTLE STATUS DISPLAY
+// ═══════════════════════════════════════════════════════════════
+function getBattleStatus(player1, player2) {
+  const p1Class = typeof player1.class === 'object' ? player1.class.name : player1.class;
+  const p2Class = typeof player2.class === 'object' ? player2.class.name : player2.class;
+  
+  const p1HPBar = BarSystem.getHPBar(player1.stats.hp, player1.stats.maxHp);
+  const p2HPBar = BarSystem.getHPBar(player2.stats.hp, player2.stats.maxHp);
+  const p1EnergyBar = BarSystem.getEnergyBar(player1.stats.energy, player1.stats.maxEnergy, p1Class);
+  const p2EnergyBar = BarSystem.getEnergyBar(player2.stats.energy, player2.stats.maxEnergy, p2Class);
+  
+  let status = `📊 BATTLE STATUS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  
+  status += `👤 ${player1.name} (${p1Class} Lv.${player1.level})\n`;
+  status += `❤️ HP: ${player1.stats.hp}/${player1.stats.maxHp}\n`;
+  status += `${p1HPBar}\n`;
+  status += `💙 ${player1.energyType || 'Energy'}: ${player1.stats.energy}/${player1.stats.maxEnergy}\n`;
+  status += `${p1EnergyBar}\n`;
+  if (player1.statusEffects && player1.statusEffects.length > 0) {
+    status += `🌀 Status: ${player1.statusEffects.map(e => `${getStatusEmoji(e.type)} ${(e.type || 'unknown').toUpperCase()} (${e.duration})`).join(', ')}\n`;
+  }
+  
+  status += `\n👤 ${player2.name} (${p2Class} Lv.${player2.level})\n`;
+  status += `❤️ HP: ${player2.stats.hp}/${player2.stats.maxHp}\n`;
+  status += `${p2HPBar}\n`;
+  status += `💙 ${player2.energyType || 'Energy'}: ${player2.stats.energy}/${player2.stats.maxEnergy}\n`;
+  status += `${p2EnergyBar}\n`;
+  if (player2.statusEffects && player2.statusEffects.length > 0) {
+    status += `🌀 Status: ${player2.statusEffects.map(e => `${getStatusEmoji(e.type)} ${(e.type || 'unknown').toUpperCase()} (${e.duration})`).join(', ')}\n`;
+  }
+  
+  return status;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GET STATUS EFFECT EMOJI
+// ═══════════════════════════════════════════════════════════════
+function getStatusEmoji(type) {
+  const emojis = {
+    'poison': '🧪',
+    'burn': '🔥',
+    'freeze': '❄️',
+    'stun': '💫',
+    'bleed': '🩸',
+    'weaken': '💀'
+  };
+  return emojis[type] || '🌀';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HANDLE PVP VICTORY
+// ═══════════════════════════════════════════════════════════════
+function handlePVPVictory(sock, chatId, winner, loser, db, saveDatabase) {
+  const xpReward = Math.floor(50 + (loser.level * 5));
+  const goldReward = Math.floor(100 + (loser.level * 10));
+
+  winner.pvpWins = (winner.pvpWins || 0) + 1;
+  winner.xp = (winner.xp || 0) + xpReward;
+  updatePlayerGold(winner, goldReward, saveDatabase);
+
+  loser.pvpLosses = (loser.pvpLosses || 0) + 1;
+  loser.stats.hp = Math.floor(loser.stats.maxHp * 0.1);
+
+  winner.pvpBattle = null;
+  loser.pvpBattle = null;
+  winner.statusEffects = [];
+  loser.statusEffects = [];
+
+  LevelUpManager.checkAndApplyLevelUps(winner, saveDatabase, sock, chatId);
+
+  saveDatabase();
+
+  const victoryMessage = DetailedCombat.generateFaintMessage(loser, winner);
+
+  const fullMessage = `${victoryMessage}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎁 REWARDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💫 +${xpReward} XP
+🪙 +${goldReward} Gold
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 PVP RECORD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${winner.name}: ${winner.pvpWins} wins
+${loser.name}: ${loser.pvpLosses} losses
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+  return sock.sendMessage(chatId, { text: fullMessage });
+}

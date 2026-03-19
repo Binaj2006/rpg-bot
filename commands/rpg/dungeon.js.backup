@@ -1,0 +1,461 @@
+const DungeonManager = require('../../rpg/dungeons/DungeonManager');
+const ImprovedCombat2 = require('../../rpg/utils/ImprovedCombat');
+const { updatePlayerGold: updatePlayerGold2 } = require('../../rpg/utils/GoldManager');
+
+const dungeonModule = {
+  name: 'dungeon',
+  description: 'Enter dungeons and fight monsters',
+  
+  async execute(sock, msg, args, getDatabase, saveDatabase, sender) {
+    const chatId = msg.key.remoteJid;
+    const db = getDatabase();
+    const player = db.users[sender];
+
+    if (!player) {
+      return sock.sendMessage(chatId, { 
+        text: '❌ You are not registered! Use /register first.' 
+      });
+    }
+
+    const subCommand = args[0]?.toLowerCase();
+
+    // ============================================
+    // SUB-COMMAND: /dungeon list
+    // ============================================
+    if (subCommand === 'list') {
+      const availableDungeons = DungeonManager.getAvailableDungeons(player.level);
+      
+      if (availableDungeons.length === 0) {
+        return sock.sendMessage(chatId, { 
+          text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏰 DUNGEONS 🏰
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+No dungeons available at your level!
+
+Keep leveling up! 💪
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+        });
+      }
+
+      let dungeonListText = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏰 AVAILABLE DUNGEONS 🏰
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your Level: ${player.level}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+      availableDungeons.forEach((dungeon, index) => {
+        dungeonListText += `${index + 1}. ${dungeon.name}
+   📊 Rank: ${dungeon.rank}
+   ⚔ Level: ${dungeon.minLevel}-${dungeon.maxLevel}
+   👹 Monsters: ${dungeon.monsters.length}
+   💰 Rewards: ~${Math.floor(dungeon.minLevel * 20)}g
+   
+`;
+      });
+
+      dungeonListText += `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 Use /dungeon enter to start!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      return sock.sendMessage(chatId, { text: dungeonListText });
+    }
+
+    // ============================================
+    // SUB-COMMAND: /dungeon enter
+    // ============================================
+    if (subCommand === 'enter' || !subCommand) {
+      // Check if player is alive
+      if (player.stats.hp <= 0) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You are dead! Use a revive token or wait for respawn.' 
+        });
+      }
+
+      // Check if already in dungeon
+      if (player.inDungeon) {
+        const dungeon = player.currentDungeon;
+        const monster = dungeon.currentMonster;
+        
+        const menu = ImprovedCombat2.getBattleMenu(player, monster, dungeon);
+        return sock.sendMessage(chatId, { text: menu });
+      }
+
+      // ✅ CRITICAL FIX: Get dungeons available for player's level
+      const availableDungeons = DungeonManager.getAvailableDungeons(player.level);
+      
+      if (availableDungeons.length === 0) {
+        return sock.sendMessage(chatId, { 
+          text: `❌ No dungeons available at Level ${player.level}!\n\nKeep leveling up! 💪` 
+        });
+      }
+
+      // ✅ Select random dungeon from AVAILABLE dungeons only
+      const selectedDungeon = availableDungeons[Math.floor(Math.random() * availableDungeons.length)];
+      const dungeon = DungeonManager.generateDungeon(selectedDungeon, player.level);
+
+      // Initialize dungeon
+      player.inDungeon = true;
+      player.currentDungeon = {
+        name: dungeon.name,
+        rank: dungeon.rank,
+        monstersDefeated: 0,
+        totalMonsters: dungeon.monsters.length,
+        currentMonster: dungeon.monsters[0],
+        monsters: dungeon.monsters,
+        turn: 1,
+        playerDamageDealt: 0,
+        monsterDamageDealt: 0,
+        startTime: Date.now()
+      };
+
+      saveDatabase();
+
+      const startMessage = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏰 DUNGEON ENTERED! 🏰
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${dungeon.name}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 Rank: ${dungeon.rank}
+👹 Monsters: ${dungeon.monsters.length}
+🎯 Progress: 0/${dungeon.monsters.length}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${ImprovedCombat2.getBattleMenu(player, dungeon.monsters[0], player.currentDungeon)}`;
+
+      return sock.sendMessage(chatId, { text: startMessage });
+    }
+
+    // ============================================
+    // SUB-COMMAND: /dungeon use [skill]
+    // ============================================
+    if (subCommand === 'use') {
+      if (!player.inDungeon) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You are not in a dungeon!' 
+        });
+      }
+
+      const skillName = args.slice(1).join(' ').toLowerCase();
+      if (!skillName) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ Specify a skill! Example: /dungeon use power strike' 
+        });
+      }
+
+      const dungeon = player.currentDungeon;
+      const monster = dungeon.currentMonster;
+
+      // ✅ FIX: Properly format entities for combat system
+      const playerEntity = {
+        name: player.name,
+        stats: player.stats,
+        skills: player.skills,
+        class: player.class,
+        energyType: player.class.energyType || 'Energy',
+        energyColor: player.class.energyColor || '💙'
+      };
+
+      const monsterEntity = {
+        name: monster.name,
+        stats: monster.stats,
+        skills: monster.skills || {},
+        abilities: monster.abilities || []
+      };
+
+      // Execute skill
+      const result = ImprovedCombat2.executeSkill(playerEntity, monsterEntity, skillName);
+
+      if (!result.success) {
+        return sock.sendMessage(chatId, { 
+          text: `❌ ${result.message}` 
+        });
+      }
+
+      // Update player and monster after skill use
+      player.stats = playerEntity.stats;
+      monster.stats = monsterEntity.stats;
+      dungeon.turn++;
+      dungeon.playerDamageDealt += result.damage || 0;
+
+      // Check if monster is defeated
+      if (monster.stats.hp <= 0) {
+        return handleMonsterDefeat(sock, chatId, player, monster, dungeon, db, saveDatabase, sender);
+      }
+
+      // Monster counter-attack
+      let battleMessage = result.message + '\n\n';
+      
+      const monsterAction = executeMonsterAction(monster, player);
+      battleMessage += monsterAction.message;
+      
+      dungeon.monsterDamageDealt += monsterAction.damage || 0;
+
+      // Check if player is defeated
+      if (player.stats.hp <= 0) {
+        return handleDungeonFailure(sock, chatId, player, dungeon, saveDatabase);
+      }
+
+      saveDatabase();
+
+      // Show updated battle menu
+      battleMessage += '\n\n' + ImprovedCombat2.getBattleMenu(player, monster, dungeon);
+
+      return sock.sendMessage(chatId, { text: battleMessage });
+    }
+
+    // ============================================
+    // SUB-COMMAND: /dungeon attack (basic attack)
+    // ============================================
+    if (subCommand === 'attack') {
+      if (!player.inDungeon) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You are not in a dungeon!' 
+        });
+      }
+
+      const dungeon = player.currentDungeon;
+      const monster = dungeon.currentMonster;
+
+      // Calculate basic attack damage
+      const weaponAtk = player.weapon?.attack || 0;
+      const totalAtk = player.stats.atk + weaponAtk;
+      const damage = Math.max(1, totalAtk - Math.floor(monster.stats.def * 0.5));
+
+      monster.stats.hp -= damage;
+      dungeon.turn++;
+      dungeon.playerDamageDealt += damage;
+
+      let battleMessage = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔ ${player.name} used BASIC ATTACK!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔ You attack for ${damage} damage!
+👹 ${monster.name}: ${Math.max(0, monster.stats.hp)}/${monster.stats.maxHp} HP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+      // Check if monster is defeated
+      if (monster.stats.hp <= 0) {
+        return handleMonsterDefeat(sock, chatId, player, monster, dungeon, db, saveDatabase, sender);
+      }
+
+      // Monster counter-attack
+      const monsterAction = executeMonsterAction(monster, player);
+      battleMessage += monsterAction.message;
+      dungeon.monsterDamageDealt += monsterAction.damage || 0;
+
+      // Check if player is defeated
+      if (player.stats.hp <= 0) {
+        return handleDungeonFailure(sock, chatId, player, dungeon, saveDatabase);
+      }
+
+      saveDatabase();
+
+      // Show updated battle menu
+      battleMessage += '\n\n' + ImprovedCombat2.getBattleMenu(player, monster, dungeon);
+
+      return sock.sendMessage(chatId, { text: battleMessage });
+    }
+
+    // ============================================
+    // SUB-COMMAND: /dungeon flee
+    // ============================================
+    if (subCommand === 'flee') {
+      if (!player.inDungeon) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ You are not in a dungeon!' 
+        });
+      }
+
+      player.inDungeon = false;
+      player.currentDungeon = null;
+      saveDatabase();
+
+      return sock.sendMessage(chatId, { 
+        text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏃 You fled from the dungeon!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠ Progress lost!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+      });
+    }
+
+    // Default: Show help
+    return sock.sendMessage(chatId, { 
+      text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏰 DUNGEONS 🏰
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/dungeon list - View available dungeons
+/dungeon enter - Enter a dungeon
+/dungeon attack - Basic attack
+/dungeon use [skill] - Use a skill
+/dungeon flee - Flee from dungeon
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+    });
+  }
+};
+
+// ============================================
+// DUNGEON.JS HELPER FUNCTIONS
+// ============================================
+
+function executeMonsterAction(monster, player) {
+  // Monster uses random ability or basic attack
+  const useAbility = Math.random() < 0.3 && monster.abilities && monster.abilities.length > 0;
+
+  if (useAbility) {
+    const ability = monster.abilities[Math.floor(Math.random() * monster.abilities.length)];
+    const damage = Math.floor(monster.stats.atk * 1.3);
+    player.stats.hp -= damage;
+
+    return {
+      damage: damage,
+      message: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👹 ${monster.name} used ${ability}!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💥 You take ${damage} damage!
+❤ Your HP: ${Math.max(0, player.stats.hp)}/${player.stats.maxHp}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+    };
+  } else {
+    const damage = Math.max(1, monster.stats.atk - Math.floor(player.stats.def * 0.5));
+    player.stats.hp -= damage;
+
+    return {
+      damage: damage,
+      message: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👹 ${monster.name} attacks!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💥 You take ${damage} damage!
+❤ Your HP: ${Math.max(0, player.stats.hp)}/${player.stats.maxHp}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+    };
+  }
+}
+
+function handleMonsterDefeat(sock, chatId, player, monster, dungeon, db, saveDatabase, sender) {
+  // Calculate rewards
+  const xpReward = DungeonManager.calculateMonsterRewards(monster, player.level).xp;
+  const crystalReward = DungeonManager.calculateMonsterRewards(monster, player.level).crystals;
+  const goldReward = DungeonManager.calculateMonsterRewards(monster, player.level).gold;
+
+  // ✅ APPLY REWARDS WITH PROPER GOLD SYNC
+  player.xp += xpReward;
+  player.manaCrystals += crystalReward;
+  updatePlayerGold2(player, goldReward, saveDatabase); // ✅ Fixes gold bug!
+
+  dungeon.monstersDefeated++;
+
+  // Level up check
+  let levelUpMessage = '';
+  if (player.xp >= player.xpToNextLevel) {
+    player.level++;
+    player.xp -= player.xpToNextLevel;
+    player.xpToNextLevel = Math.floor(player.xpToNextLevel * 1.5);
+    
+    // Stat increases
+    player.stats.maxHp += 10;
+    player.stats.hp = player.stats.maxHp;
+    player.stats.atk += 2;
+    player.stats.def += 1;
+    
+    levelUpMessage = `\n🎉 ${player.name} grew to Level ${player.level}! 🎉`;
+  }
+
+  let victoryMessage = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👹 ${monster.name} defeated!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💫 +${xpReward} XP
+💎 +${crystalReward} Crystals
+🪙 +${goldReward} Gold${levelUpMessage}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+  // Check if dungeon is complete
+  if (dungeon.monstersDefeated >= dungeon.totalMonsters) {
+    return handleDungeonClear(sock, chatId, player, dungeon, db, saveDatabase, sender);
+  }
+
+  // Load next monster
+  dungeon.currentMonster = dungeon.monsters[dungeon.monstersDefeated];
+  dungeon.turn = 1;
+  dungeon.playerDamageDealt = 0;
+  dungeon.monsterDamageDealt = 0;
+
+  saveDatabase();
+
+  victoryMessage += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 Progress: ${dungeon.monstersDefeated}/${dungeon.totalMonsters}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  victoryMessage += ImprovedCombat2.getBattleMenu(player, dungeon.currentMonster, dungeon);
+
+  return sock.sendMessage(chatId, { text: victoryMessage });
+}
+
+function handleDungeonClear(sock, chatId, player, dungeon, db, saveDatabase, sender) {
+  // Bonus rewards for clearing dungeon
+  const bonusXP = Math.floor(player.level * 100);
+  const bonusCrystals = Math.floor(player.level * 20);
+  const bonusGold = Math.floor(player.level * 30);
+
+  player.xp += bonusXP;
+  player.manaCrystals += bonusCrystals;
+  updatePlayerGold2(player, bonusGold, saveDatabase); // ✅ Fixes gold bug!
+
+  // Generate dungeon clear loot
+  const loot = DungeonManager.generateDungeonLoot(dungeon, player.level);
+  let lootMessage = '';
+  
+  if (loot && loot.length > 0) {
+    player.inventory = player.inventory || { items: [] };
+    player.inventory.items = player.inventory.items || [];
+    
+    loot.forEach(item => {
+      player.inventory.items.push(item);
+      lootMessage += `\n🎁 ${item.name} (${item.rarity})`;
+    });
+  }
+
+  // Clear dungeon state
+  player.inDungeon = false;
+  player.currentDungeon = null;
+
+  // ✅ SAVE EVERYTHING
+  saveDatabase();
+
+  const clearMessage = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏆 DUNGEON CLEARED! 🏆
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${dungeon.name} completed!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 Monsters Defeated: ${dungeon.totalMonsters}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎁 CLEAR BONUS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💫 +${bonusXP} XP
+💎 +${bonusCrystals} Crystals
+🪙 +${bonusGold} Gold${lootMessage}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+  return sock.sendMessage(chatId, { text: clearMessage });
+}
+
+function handleDungeonFailure(sock, chatId, player, dungeon, saveDatabase) {
+  player.stats.hp = 0;
+  player.inDungeon = false;
+  player.currentDungeon = null;
+  
+  saveDatabase();
+
+  return sock.sendMessage(chatId, { 
+    text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💀 DUNGEON FAILED 💀
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You have been defeated!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 Progress: ${dungeon.monstersDefeated}/${dungeon.totalMonsters}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Use a revive token or wait for respawn.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+  });
+}
+
+// Export dungeon module
+module.exports = dungeonModule;

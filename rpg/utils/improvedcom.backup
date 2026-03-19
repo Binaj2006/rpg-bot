@@ -1,0 +1,518 @@
+const SkillDescriptions = require('../utils/SkillDescriptions');
+const StatusEffectManager = require('./StatusEffectManager');
+
+class ImprovedCombat {
+  
+  // ═══════════════════════════════════════════════════════════════
+  // EXECUTE SKILL (For Gate/Boss/Guild Raids/Dungeons)
+  // ═══════════════════════════════════════════════════════════════
+  static executeSkill(attacker, defender, skillName) {
+    // Find skill in player's active skills
+    const skill = attacker.skills?.active?.find(s => 
+      s.name.toLowerCase() === skillName.toLowerCase()
+    );
+
+    if (!skill) {
+      return {
+        success: false,
+        message: `❌ You don't have the skill "${skillName}"!\n\nUse /skills to see your available skills.`
+      };
+    }
+
+    // ✅ GET FULL SKILL DATA FROM SKILLDESCRIPTIONS
+    const skillInfo = SkillDescriptions.getSkillDescription(skill.name);
+    
+    // ✅ DETERMINE ENERGY COST TYPE
+    const energyCost = skillInfo.manaCost || skillInfo.holyCost || skillInfo.hungerCost || 
+                       skillInfo.energyCost || skillInfo.rageCost || skillInfo.dragonCost || 
+                       skillInfo.focusCost || skill.manaCost || 30;
+    
+    const costType = skillInfo.manaCost ? 'Mana' : 
+                     skillInfo.holyCost ? 'Holy' :
+                     skillInfo.hungerCost ? 'Hunger' :
+                     skillInfo.energyCost ? 'Energy' :
+                     skillInfo.rageCost ? 'Rage' :
+                     skillInfo.dragonCost ? 'Dragon' :
+                     skillInfo.focusCost ? 'Focus' : 
+                     (attacker.energyType || 'Energy');
+
+    // Check energy cost
+    if (attacker.stats.energy < energyCost) {
+      return {
+        success: false,
+        message: `❌ Not enough ${costType}!\nNeed: ${energyCost}\nHave: ${attacker.stats.energy}`
+      };
+    }
+
+    // ✅ CHECK COOLDOWN
+    const cooldownCheck = this.checkCooldown(attacker, skill.name);
+    if (!cooldownCheck.ready) {
+      return {
+        success: false,
+        message: cooldownCheck.message
+      };
+    }
+
+    // Deduct energy
+    attacker.stats.energy -= energyCost;
+    
+    // Set cooldown
+    if (!attacker.lastSkillUse) attacker.lastSkillUse = {};
+    attacker.lastSkillUse[skill.name] = Date.now();
+    
+    // ✅ CALCULATE DAMAGE WITH PROPER MULTIPLIERS
+    const weaponBonus = attacker.weapon?.bonus || 0;
+    const baseAtk = attacker.stats.atk + weaponBonus;
+    
+    // Use damage from SkillDescriptions (usually percentage like 120, 150, 200)
+    const skillDamagePercent = skillInfo.damage || skill.damage || 100;
+    let baseDamage = Math.floor(baseAtk * (skillDamagePercent / 100));
+    
+    // Check for crit (20% base chance)
+    const isCrit = Math.random() < 0.2;
+    if (isCrit) {
+      baseDamage = Math.floor(baseDamage * 1.8);
+    }
+    
+    // Apply defense reduction (defender takes 50% reduced damage from DEF)
+    const defReduction = Math.floor((defender.stats?.def || 0) * 0.5);
+    const finalDamage = Math.max(1, baseDamage - defReduction);
+    
+    // Apply damage
+    defender.stats.hp -= finalDamage;
+    
+    // ✅ APPLY STATUS EFFECTS FROM SKILL
+    const statusEffects = this.extractStatusEffects(skillInfo.effect);
+    let effectsApplied = [];
+    
+    if (statusEffects.length > 0) {
+      statusEffects.forEach(effectType => {
+        // 60% chance to apply status effect
+        if (Math.random() < 0.6) {
+          StatusEffectManager.applyEffect(defender, effectType);
+          const effectData = StatusEffectManager.EFFECTS[effectType];
+          if (effectData) {
+            effectsApplied.push(`${effectData.emoji} ${effectData.name}`);
+          }
+        }
+      });
+    }
+    
+    // Build narrative with animation
+    let message = `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `✨ ${attacker.name} used ${skill.name}!\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    
+    // Show skill animation
+    if (skillInfo.animation) {
+      message += `${skillInfo.animation}\n`;
+      message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    }
+    
+    if (isCrit) {
+      message += `💥 CRITICAL HIT!\n`;
+    }
+    
+    message += `💥 Dealt ${finalDamage} damage to ${defender.name}!\n`;
+    
+    // Show status effects applied
+    if (effectsApplied.length > 0) {
+      message += `${effectsApplied.join(', ')} applied!\n`;
+    }
+    
+    message += `${attacker.energyColor || '💙'} ${costType}: ${attacker.stats.energy}/${attacker.stats.maxEnergy}\n`;
+
+    return {
+      success: true,
+      message: message,
+      damage: finalDamage,
+      isCrit: isCrit,
+      effectsApplied: effectsApplied
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // EXTRACT STATUS EFFECTS FROM SKILL DESCRIPTION
+  // ═══════════════════════════════════════════════════════════════
+  static extractStatusEffects(effectText) {
+    if (!effectText || typeof effectText !== 'string') return [];
+    
+    const effects = [];
+    const lowerText = effectText.toLowerCase();
+    
+    // Check for each status effect
+    if (lowerText.includes('burn') || lowerText.includes('fire') || lowerText.includes('flame')) {
+      effects.push('burn');
+    }
+    if (lowerText.includes('freeze') || lowerText.includes('frozen') || lowerText.includes('ice')) {
+      effects.push('freeze');
+    }
+    if (lowerText.includes('poison') || lowerText.includes('toxic') || lowerText.includes('venom')) {
+      effects.push('poison');
+    }
+    if (lowerText.includes('stun') || lowerText.includes('paralyze') || lowerText.includes('paralysis')) {
+      effects.push('stun');
+    }
+    if (lowerText.includes('bleed') || lowerText.includes('bleeding')) {
+      effects.push('bleed');
+    }
+    if (lowerText.includes('weaken') || lowerText.includes('curse')) {
+      effects.push('weaken');
+    }
+    if (lowerText.includes('slow')) {
+      effects.push('slow');
+    }
+    
+    return effects;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // GENERATE BATTLE MENU (Pokemon-style)
+  // ═══════════════════════════════════════════════════════════════
+  static getBattleMenu(player, monster, battle) {
+    const energyDisplay = `${player.energyColor || '💙'} ${player.energyType}: ${player.stats.energy}/${player.stats.maxEnergy}`;
+    
+    let menu = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔️ BATTLE ⚔️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👤 YOU: ${player.name}
+❤️ HP: ${player.stats.hp}/${player.stats.maxHp}
+${energyDisplay}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👹 ENEMY: ${monster.name}
+❤️ HP: ${monster.hp}/${monster.maxHp}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔️ ACTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/battle attack - Basic attack
+/battle skills - View all skills
+/battle items - Use item
+/battle run - Flee battle
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+    // Add status effects if any
+    if (player.statusEffects && player.statusEffects.length > 0) {
+      menu += `\n💫 Your Effects: ${player.statusEffects.map(e => e.type).join(', ')}`;
+    }
+    if (monster.statusEffects && monster.statusEffects.length > 0) {
+      menu += `\n💀 Enemy Effects: ${monster.statusEffects.map(e => e.type).join(', ')}`;
+    }
+
+    return menu;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // GENERATE SKILLS MENU
+  // ═══════════════════════════════════════════════════════════════
+  static getSkillsMenu(player) {
+    const energyDisplay = `${player.energyColor || '💙'} ${player.energyType}: ${player.stats.energy}/${player.stats.maxEnergy}`;
+    
+    let menu = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✨ YOUR SKILLS ✨
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${energyDisplay}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    if (!player.skills || !player.skills.active || player.skills.active.length === 0) {
+      return menu + '❌ No skills learned!\n━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+    }
+
+    player.skills.active.forEach((skill, i) => {
+      const skillInfo = SkillDescriptions.getSkillDescription(skill.name);
+      const cooldownCheck = this.checkCooldown(player, skill.name);
+      const isReady = cooldownCheck.ready ? '✅' : '🔒';
+      
+      // Get proper energy cost
+      const energyCost = skillInfo.manaCost || skillInfo.holyCost || skillInfo.hungerCost || 
+                         skillInfo.energyCost || skillInfo.rageCost || skillInfo.dragonCost || 
+                         skillInfo.focusCost || skill.manaCost || 30;
+      
+      menu += `${i + 1}. ${isReady} ${skill.name}\n`;
+      menu += `   💥 Damage: ${skillInfo.damage || skill.damage}%\n`;
+      menu += `   💙 Cost: ${energyCost} ${player.energyType}\n`;
+      menu += `   ⏰ Cooldown: ${skillInfo.cooldown || skill.cooldown}s\n`;
+      if (!cooldownCheck.ready) {
+        menu += `   🔒 Ready in: ${Math.ceil(cooldownCheck.timeLeft / 1000)}s\n`;
+      }
+      menu += `\n`;
+    });
+
+    menu += `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 USAGE
+/battle use [number]
+Example: /battle use 1
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+    return menu;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // GENERATE ITEMS MENU
+  // ═══════════════════════════════════════════════════════════════
+  static getItemsMenu(player) {
+    const inventory = player.inventory || {};
+    
+    let menu = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎒 BATTLE ITEMS 🎒
+━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    const healthPots = inventory.healthPotions || 0;
+    const energyPots = inventory.manaPotions || 0;
+
+    menu += `1. 🩹 Health Potion x${healthPots}\n`;
+    menu += `   Restores 50% HP\n\n`;
+    menu += `2. 💙 ${player.energyType} Potion x${energyPots}\n`;
+    menu += `   Restores 50% ${player.energyType}\n\n`;
+
+    menu += `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 USAGE
+/battle item [number]
+Example: /battle item 1
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+    return menu;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // CHECK SKILL COOLDOWN
+  // ═══════════════════════════════════════════════════════════════
+  static checkCooldown(player, skillName) {
+    if (!player.lastSkillUse) player.lastSkillUse = {};
+
+    const now = Date.now();
+    const lastUse = player.lastSkillUse[skillName];
+
+    if (!lastUse) return { ready: true };
+
+    const skill = player.skills?.active?.find(s => s.name === skillName);
+    if (!skill) return { ready: false, message: 'Skill not found!' };
+
+    const skillInfo = SkillDescriptions.getSkillDescription(skill.name);
+    const cooldownMs = (skillInfo.cooldown || skill.cooldown || 10) * 1000;
+    const timeLeft = lastUse + cooldownMs - now;
+
+    if (timeLeft > 0) {
+      return {
+        ready: false,
+        timeLeft: timeLeft,
+        message: `⏳ ${skillName} is on cooldown! (${Math.ceil(timeLeft / 1000)}s remaining)`
+      };
+    }
+
+    return { ready: true };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // PROCESS ATTACK (Pokemon-style)
+  // ═══════════════════════════════════════════════════════════════
+  static processAttack(player, monster, battle) {
+    let narrative = '';
+
+    // Player attacks
+    const weaponBonus = player.weapon?.bonus || 0;
+    let playerDamage = Math.max(1, (player.stats.atk + weaponBonus) - Math.floor(monster.def / 2));
+
+    // Check for crit
+    const isCrit = Math.random() < 0.1;
+    if (isCrit) {
+      playerDamage = Math.floor(playerDamage * 2);
+      narrative += `💥 CRITICAL HIT!\n`;
+    }
+
+    monster.hp -= playerDamage;
+
+    narrative += `⚔️ ${player.name}'s attack!\n`;
+    narrative += `💥 Dealt ${playerDamage} damage to ${monster.name}!\n\n`;
+
+    // Check if monster defeated
+    if (monster.hp <= 0) {
+      narrative += `💀 ${monster.name} fainted!\n`;
+      return { victory: true, narrative };
+    }
+
+    // Monster attacks back
+    const dodged = Math.random() < 0.05;
+    if (dodged) {
+      narrative += `🌀 ${player.name} dodged the attack!\n`;
+    } else {
+      const monsterDamage = Math.max(1, monster.atk - Math.floor(player.stats.def / 2));
+      player.stats.hp -= monsterDamage;
+      
+      narrative += `👹 ${monster.name} attacked!\n`;
+      narrative += `💥 Dealt ${monsterDamage} damage to ${player.name}!\n`;
+
+      if (player.stats.hp <= 0) {
+        player.stats.hp = 1;
+        narrative += `\n💀 ${player.name} fainted!\n`;
+        return { defeat: true, narrative };
+      }
+    }
+
+    return { narrative };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // PROCESS SKILL (Pokemon-style)
+  // ═══════════════════════════════════════════════════════════════
+  static processSkill(player, monster, skillName, battle) {
+    const skill = player.skills.active.find(s => 
+      s.name.toLowerCase() === skillName.toLowerCase()
+    );
+
+    if (!skill) {
+      return {
+        success: false,
+        message: `❌ Skill not found: ${skillName}`
+      };
+    }
+
+    // ✅ GET SKILL INFO
+    const skillInfo = SkillDescriptions.getSkillDescription(skill.name);
+    
+    // Check cooldown
+    const cooldownCheck = this.checkCooldown(player, skill.name);
+    if (!cooldownCheck.ready) {
+      return {
+        success: false,
+        message: cooldownCheck.message
+      };
+    }
+
+    // ✅ GET PROPER ENERGY COST
+    const energyCost = skillInfo.manaCost || skillInfo.holyCost || skillInfo.hungerCost || 
+                       skillInfo.energyCost || skillInfo.rageCost || skillInfo.dragonCost || 
+                       skillInfo.focusCost || skill.manaCost || 30;
+
+    // Check energy
+    if (player.stats.energy < energyCost) {
+      return {
+        success: false,
+        message: `❌ Not enough ${player.energyType}!\nNeed: ${energyCost}\nHave: ${player.stats.energy}`
+      };
+    }
+
+    // Use skill
+    player.stats.energy -= energyCost;
+    player.lastSkillUse[skill.name] = Date.now();
+
+    // ✅ CALCULATE PROPER DAMAGE
+    const weaponBonus = player.weapon?.bonus || 0;
+    const baseAtk = player.stats.atk + weaponBonus;
+    const skillDamagePercent = skillInfo.damage || skill.damage || 100;
+    let damage = Math.floor(baseAtk * (skillDamagePercent / 100));
+
+    // Check for crit
+    const isCrit = Math.random() < 0.15;
+    if (isCrit) {
+      damage = Math.floor(damage * 2);
+    }
+
+    damage = Math.max(1, damage - Math.floor(monster.def / 2));
+    monster.hp -= damage;
+
+    // ✅ APPLY STATUS EFFECTS
+    const statusEffects = this.extractStatusEffects(skillInfo.effect);
+    let effectsApplied = [];
+    
+    if (statusEffects.length > 0) {
+      statusEffects.forEach(effectType => {
+        if (Math.random() < 0.6) {
+          StatusEffectManager.applyEffect(monster, effectType);
+          const effectData = StatusEffectManager.EFFECTS[effectType];
+          if (effectData) {
+            effectsApplied.push(`${effectData.emoji} ${effectData.name}`);
+          }
+        }
+      });
+    }
+
+    let narrative = `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    narrative += `✨ ${player.name} used ${skill.name}!\n`;
+    narrative += `${skillInfo.animation}\n`;
+    narrative += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    if (isCrit) narrative += `💥 CRITICAL HIT!\n`;
+    narrative += `💥 Dealt ${damage} damage to ${monster.name}!\n`;
+    if (effectsApplied.length > 0) {
+      narrative += `${effectsApplied.join(', ')} applied!\n`;
+    }
+    narrative += `💙 ${player.energyType}: ${player.stats.energy}/${player.stats.maxEnergy}\n\n`;
+
+    // Check if monster defeated
+    if (monster.hp <= 0) {
+      narrative += `💀 ${monster.name} fainted!\n`;
+      return { success: true, victory: true, narrative };
+    }
+
+    // Monster attacks back
+    const dodged = Math.random() < 0.05;
+    if (dodged) {
+      narrative += `🌀 ${player.name} dodged the attack!\n`;
+    } else {
+      const monsterDamage = Math.max(1, monster.atk - Math.floor(player.stats.def / 2));
+      player.stats.hp -= monsterDamage;
+      
+      narrative += `👹 ${monster.name} attacked!\n`;
+      narrative += `💥 Dealt ${monsterDamage} damage to ${player.name}!\n`;
+
+      if (player.stats.hp <= 0) {
+        player.stats.hp = 1;
+        narrative += `\n💀 ${player.name} fainted!\n`;
+        return { success: true, defeat: true, narrative };
+      }
+    }
+
+    return { success: true, narrative };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // USE ITEM IN BATTLE
+  // ═══════════════════════════════════════════════════════════════
+  static useItem(player, itemNumber) {
+    const inventory = player.inventory || {};
+
+    if (itemNumber === 1) {
+      // Health potion
+      if ((inventory.healthPotions || 0) <= 0) {
+        return {
+          success: false,
+          message: '❌ No Health Potions!'
+        };
+      }
+
+      const healAmount = Math.floor(player.stats.maxHp * 0.5);
+      player.stats.hp = Math.min(player.stats.maxHp, player.stats.hp + healAmount);
+      inventory.healthPotions--;
+
+      return {
+        success: true,
+        narrative: `🩹 ${player.name} used Health Potion!\n💚 Restored ${healAmount} HP!\n❤️ HP: ${player.stats.hp}/${player.stats.maxHp}`
+      };
+    }
+
+    if (itemNumber === 2) {
+      // Energy potion
+      if ((inventory.manaPotions || 0) <= 0) {
+        return {
+          success: false,
+          message: `❌ No ${player.energyType} Potions!`
+        };
+      }
+
+      const restoreAmount = Math.floor(player.stats.maxEnergy * 0.5);
+      player.stats.energy = Math.min(player.stats.maxEnergy, player.stats.energy + restoreAmount);
+      inventory.manaPotions--;
+
+      return {
+        success: true,
+        narrative: `💙 ${player.name} used ${player.energyType} Potion!\n✨ Restored ${restoreAmount} ${player.energyType}!\n💙 ${player.energyType}: ${player.stats.energy}/${player.stats.maxEnergy}`
+      };
+    }
+
+    return {
+      success: false,
+      message: '❌ Invalid item number!'
+    };
+  }
+}
+
+module.exports = ImprovedCombat;

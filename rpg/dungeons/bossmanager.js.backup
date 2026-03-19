@@ -1,0 +1,185 @@
+const bossTemplates = [
+  // ========== F-RANK BOSSES (Level 1-5) ==========
+  { name: 'Giant Slime', rank: 'F', emoji: '🟢', title: 'Lord of Ooze', baseHp: 150, baseAtk: 12, baseDef: 5, abilities: ['Slime Tsunami', 'Acid Spray'], minLevel: 1, baseXPReward: 50, baseCrystalReward: 10, baseGoldReward: 20 },
+  { name: 'Goblin Shaman', rank: 'F', emoji: '🧙', title: 'Tribal Elder', baseHp: 130, baseAtk: 15, baseDef: 4, abilities: ['Dark Bolt', 'Curse'], minLevel: 3, baseXPReward: 80, baseCrystalReward: 15, baseGoldReward: 30 },
+  { name: 'Mad Wolf', rank: 'F', emoji: '🐺', title: 'Rabid Beast', baseHp: 140, baseAtk: 18, baseDef: 6, abilities: ['Feral Bite', 'Howl'], minLevel: 5, baseXPReward: 100, baseCrystalReward: 20, baseGoldReward: 40 },
+
+  // ========== E-RANK BOSSES (Level 6-10) ==========
+  { name: 'Dire Wolf Alpha', rank: 'E', emoji: '🐺', title: 'Pack Leader', baseHp: 250, baseAtk: 25, baseDef: 12, abilities: ['Pack Summon', 'Alpha Howl', 'Savage Bite'], minLevel: 6, baseXPReward: 200, baseCrystalReward: 30, baseGoldReward: 60 },
+  { name: 'Orc Warlord', rank: 'E', emoji: '👹', title: 'Savage Commander', baseHp: 300, baseAtk: 30, baseDef: 15, abilities: ['Battle Rage', 'Cleave', 'War Cry'], minLevel: 7, baseXPReward: 250, baseCrystalReward: 35, baseGoldReward: 70 },
+  { name: 'Troll Berserker', rank: 'E', emoji: '👾', title: 'Unstoppable Brute', baseHp: 350, baseAtk: 28, baseDef: 18, abilities: ['Regeneration', 'Smash', 'Rampage'], minLevel: 8, baseXPReward: 300, baseCrystalReward: 40, baseGoldReward: 80 },
+  { name: 'Giant Spider Queen', rank: 'E', emoji: '🕷️', title: 'Webweaver Matriarch', baseHp: 280, baseAtk: 32, baseDef: 10, abilities: ['Poison Mist', 'Web Prison', 'Spawn Minions'], minLevel: 9, baseXPReward: 350, baseCrystalReward: 45, baseGoldReward: 90 },
+  { name: 'Wraith Lord', rank: 'E', emoji: '👻', title: 'Phantom Sovereign', baseHp: 260, baseAtk: 35, baseDef: 8, abilities: ['Soul Drain', 'Phase Shift', 'Death Touch'], minLevel: 10, baseXPReward: 400, baseCrystalReward: 50, baseGoldReward: 100 },
+
+  // ========== D-RANK BOSSES (Level 11-20) ==========
+  { name: 'Lesser Demon Lord', rank: 'D', emoji: '😈', title: 'Herald of Darkness', baseHp: 500, baseAtk: 45, baseDef: 22, abilities: ['Hellfire', 'Dark Chains', 'Demonic Aura'], minLevel: 11, baseXPReward: 600, baseCrystalReward: 60, baseGoldReward: 120 },
+  { name: 'Wyvern Matriarch', rank: 'D', emoji: '🐉', title: 'Sky Terror', baseHp: 550, baseAtk: 50, baseDef: 25, abilities: ['Flame Breath', 'Dive Attack', 'Tail Whip'], minLevel: 12, baseXPReward: 700, baseCrystalReward: 70, baseGoldReward: 140 },
+  { name: 'Ogre Chieftain', rank: 'D', emoji: '👹', title: 'Mountain Crusher', baseHp: 600, baseAtk: 48, baseDef: 28, abilities: ['Earthquake', 'Boulder Throw', 'Ground Slam'], minLevel: 13, baseXPReward: 800, baseCrystalReward: 80, baseGoldReward: 160 },
+  { name: 'Shadow Assassin', rank: 'D', emoji: '🥷', title: 'Silent Death', baseHp: 450, baseAtk: 55, baseDef: 20, abilities: ['Backstab', 'Shadow Step', 'Poison Blade'], minLevel: 14, baseXPReward: 900, baseCrystalReward: 90, baseGoldReward: 180 },
+  { name: 'Lich Necromancer', rank: 'D', emoji: '💀', title: 'Undead Sovereign', baseHp: 480, baseAtk: 52, baseDef: 23, abilities: ['Army of Dead', 'Death Bolt', 'Life Drain'], minLevel: 15, baseXPReward: 1000, baseCrystalReward: 100, baseGoldReward: 200 },
+  { name: 'Vampire Count', rank: 'D', emoji: '🧛', title: 'Bloodthirsty Noble', baseHp: 520, baseAtk: 53, baseDef: 21, abilities: ['Blood Feast', 'Bat Swarm', 'Hypnosis'], minLevel: 16, baseXPReward: 1100, baseCrystalReward: 110, baseGoldReward: 220 },
+  { name: 'Cerberus Alpha', rank: 'D', emoji: '🐕', title: 'Three-Headed Guardian', baseHp: 580, baseAtk: 54, baseDef: 26, abilities: ['Triple Bite', 'Hellfire', 'Intimidate'], minLevel: 17, baseXPReward: 1200, baseCrystalReward: 120, baseGoldReward: 240 },
+  { name: 'Chimera Beast', rank: 'D', emoji: '🦁', title: 'Hybrid Abomination', baseHp: 620, baseAtk: 56, baseDef: 27, abilities: ['Multi-Strike', 'Toxic Sting', 'Fire Breath'], minLevel: 19, baseXPReward: 1400, baseCrystalReward: 140, baseGoldReward: 280 },
+
+  // ========== C-RANK BOSSES (Level 21-30) ==========
+  { name: 'Goblin King', rank: 'C', emoji: '👑', title: 'Ruler of the Green Horde', baseHp: 800, baseAtk: 65, baseDef: 35, abilities: ['Summon Army', 'War Cry', 'Berserker Rage'], minLevel: 21, baseXPReward: 2000, baseCrystalReward: 200, baseGoldReward: 400 },
+  { name: 'Greater Demon', rank: 'C', emoji: '👿', title: 'Duke of Hell', baseHp: 900, baseAtk: 70, baseDef: 38, abilities: ['Inferno Storm', 'Dark Chains', 'Soul Rend'], minLevel: 22, baseXPReward: 2200, baseCrystalReward: 220, baseGoldReward: 440 },
+  { name: 'Basilisk Ancient', rank: 'C', emoji: '🐍', title: 'Petrifying Terror', baseHp: 850, baseAtk: 68, baseDef: 36, abilities: ['Stone Gaze', 'Venom Nova', 'Constrict'], minLevel: 23, baseXPReward: 2400, baseCrystalReward: 240, baseGoldReward: 480 },
+  { name: 'Frost Giant King', rank: 'C', emoji: '❄️', title: 'Lord of Winter', baseHp: 1000, baseAtk: 72, baseDef: 40, abilities: ['Blizzard', 'Ice Prison', 'Frozen Hammer'], minLevel: 24, baseXPReward: 2600, baseCrystalReward: 260, baseGoldReward: 520 },
+  { name: 'Phoenix Reborn', rank: 'C', emoji: '🔥', title: 'Immortal Flame', baseHp: 750, baseAtk: 75, baseDef: 32, abilities: ['Flame Nova', 'Rebirth', 'Solar Flare'], minLevel: 25, baseXPReward: 2800, baseCrystalReward: 280, baseGoldReward: 560 },
+  { name: 'Hydra Overlord', rank: 'C', emoji: '🐉', title: 'Multi-Headed Tyrant', baseHp: 950, baseAtk: 73, baseDef: 37, abilities: ['Regenerate Heads', 'Acid Breath', 'Tail Sweep'], minLevel: 26, baseXPReward: 3000, baseCrystalReward: 300, baseGoldReward: 600 },
+  { name: 'Orc King', rank: 'C', emoji: '🗡️', title: 'Supreme Warlord', baseHp: 1050, baseAtk: 76, baseDef: 42, abilities: ['Stampede', 'Execute', 'Battle Frenzy'], minLevel: 28, baseXPReward: 3400, baseCrystalReward: 340, baseGoldReward: 680 },
+  { name: 'Lich Lord', rank: 'C', emoji: '☠️', title: 'Eternal Necromancer', baseHp: 900, baseAtk: 78, baseDef: 35, abilities: ['Death Army', 'Soul Harvest', 'Unholy Curse'], minLevel: 30, baseXPReward: 3800, baseCrystalReward: 380, baseGoldReward: 760 },
+
+  // ========== B-RANK BOSSES (Level 31-40) ==========
+  { name: 'Red Dragon', rank: 'B', emoji: '🔴', title: 'Flame Emperor', baseHp: 1500, baseAtk: 90, baseDef: 50, abilities: ['Infernal Breath', 'Dragon Roar', 'Meteor Strike'], minLevel: 31, baseXPReward: 4500, baseCrystalReward: 450, baseGoldReward: 900 },
+  { name: 'Demon General', rank: 'B', emoji: '⚔️', title: 'Commander of Legions', baseHp: 1400, baseAtk: 95, baseDef: 48, abilities: ['Legion Summon', 'Hellstorm', 'Blood Rage'], minLevel: 33, baseXPReward: 5000, baseCrystalReward: 500, baseGoldReward: 1000 },
+  { name: 'Titan Colossus', rank: 'B', emoji: '⛰️', title: 'Mountain Walker', baseHp: 1800, baseAtk: 92, baseDef: 55, abilities: ['Earthquake', 'Stone Fist', 'Mountain Crush'], minLevel: 35, baseXPReward: 5500, baseCrystalReward: 550, baseGoldReward: 1100 },
+  { name: 'Leviathan', rank: 'B', emoji: '🌊', title: 'Ocean Devourer', baseHp: 1600, baseAtk: 98, baseDef: 52, abilities: ['Tsunami', 'Water Prison', 'Crushing Depths'], minLevel: 37, baseXPReward: 6000, baseCrystalReward: 600, baseGoldReward: 1200 },
+  { name: 'Ancient Lich', rank: 'B', emoji: '💀', title: 'Immortal Sorcerer', baseHp: 1300, baseAtk: 100, baseDef: 45, abilities: ['Death Wave', 'Soul Prison', 'Eternal Curse'], minLevel: 39, baseXPReward: 6500, baseCrystalReward: 650, baseGoldReward: 1300 },
+
+  // ========== A-RANK BOSSES (Level 41-50) ==========
+  { name: 'Demon Prince', rank: 'A', emoji: '😈', title: 'Heir to the Throne', baseHp: 2200, baseAtk: 120, baseDef: 65, abilities: ['Apocalypse', 'Demon Form', 'Hell Chains'], minLevel: 41, baseXPReward: 8000, baseCrystalReward: 800, baseGoldReward: 1600 },
+  { name: 'Black Dragon', rank: 'A', emoji: '⚫', title: 'Shadow Sovereign', baseHp: 2500, baseAtk: 125, baseDef: 70, abilities: ['Dark Nova', 'Shadow Breath', 'Void Strike'], minLevel: 43, baseXPReward: 9000, baseCrystalReward: 900, baseGoldReward: 1800 },
+  { name: 'Phoenix God', rank: 'A', emoji: '🔥', title: 'Eternal Flame', baseHp: 2000, baseAtk: 130, baseDef: 60, abilities: ['Sun Flare', 'Infinite Rebirth', 'Flame Storm'], minLevel: 45, baseXPReward: 10000, baseCrystalReward: 1000, baseGoldReward: 2000 },
+  { name: 'Storm Titan', rank: 'A', emoji: '⚡', title: 'Thunderlord', baseHp: 2300, baseAtk: 128, baseDef: 68, abilities: ['Lightning Storm', 'Thunder Strike', 'Electric Field'], minLevel: 47, baseXPReward: 11000, baseCrystalReward: 1100, baseGoldReward: 2200 },
+  { name: 'Vampire Progenitor', rank: 'A', emoji: '🧛', title: 'First of the Blood', baseHp: 2100, baseAtk: 135, baseDef: 63, abilities: ['Blood Moon', 'Crimson Feast', 'Night Terror'], minLevel: 49, baseXPReward: 12000, baseCrystalReward: 1200, baseGoldReward: 2400 },
+
+  // ========== S-RANK BOSSES (Level 51-70) ==========
+  { name: 'Demon King', rank: 'S', emoji: '👿', title: 'Ruler of the Underworld', baseHp: 3500, baseAtk: 160, baseDef: 85, abilities: ['Apocalypse Rain', 'Hell Gate', 'Demon Lord Form'], minLevel: 51, baseXPReward: 15000, baseCrystalReward: 1500, baseGoldReward: 3000 },
+  { name: 'Gold Dragon', rank: 'S', emoji: '🟡', title: 'Divine Wyrm', baseHp: 4000, baseAtk: 165, baseDef: 90, abilities: ['Divine Breath', 'Sacred Strike', 'Dragon God Mode'], minLevel: 55, baseXPReward: 18000, baseCrystalReward: 1800, baseGoldReward: 3600 },
+  { name: 'Titan King', rank: 'S', emoji: '⛰️', title: 'Ancient Colossus', baseHp: 4500, baseAtk: 170, baseDef: 95, abilities: ['Continental Crush', 'Titan Fist', 'Mountain Rage'], minLevel: 60, baseXPReward: 22000, baseCrystalReward: 2200, baseGoldReward: 4400 },
+  { name: 'Leviathan King', rank: 'S', emoji: '🌊', title: 'Ocean Monarch', baseHp: 3800, baseAtk: 175, baseDef: 88, abilities: ['World Flood', 'Deep Sea Pressure', 'Tidal Wave'], minLevel: 65, baseXPReward: 26000, baseCrystalReward: 2600, baseGoldReward: 5200 },
+  { name: 'Primordial Lich', rank: 'S', emoji: '💀', title: 'First Necromancer', baseHp: 3300, baseAtk: 180, baseDef: 82, abilities: ['Undead Apocalypse', 'Soul Reaper', 'Death Domain'], minLevel: 70, baseXPReward: 30000, baseCrystalReward: 3000, baseGoldReward: 6000 },
+
+  // ========== SS-RANK BOSSES (Level 71-90) ==========
+  { name: 'Shadow Monarch', rank: 'SS', emoji: '👤', title: 'King of Shadows', baseHp: 5500, baseAtk: 220, baseDef: 110, abilities: ['Shadow Army', 'Void Strike', 'Monarch Authority'], minLevel: 75, baseXPReward: 40000, baseCrystalReward: 4000, baseGoldReward: 8000 },
+  { name: 'Platinum Dragon', rank: 'SS', emoji: '⚪', title: 'Supreme Dragon Lord', baseHp: 6000, baseAtk: 230, baseDef: 120, abilities: ['Absolute Breath', 'Divine Judgment', 'Dragon Domain'], minLevel: 80, baseXPReward: 50000, baseCrystalReward: 5000, baseGoldReward: 10000 },
+  { name: 'Demon Emperor', rank: 'SS', emoji: '👹', title: 'Supreme Overlord', baseHp: 6500, baseAtk: 240, baseDef: 125, abilities: ['Hell Apocalypse', 'Demon God Form', 'Infernal Domain'], minLevel: 85, baseXPReward: 60000, baseCrystalReward: 6000, baseGoldReward: 12000 },
+  { name: 'Primordial Titan', rank: 'SS', emoji: '⛰️', title: 'First of Giants', baseHp: 7000, baseAtk: 235, baseDef: 130, abilities: ['World Shatter', 'Titan God Form', 'Primordial Rage'], minLevel: 90, baseXPReward: 70000, baseCrystalReward: 7000, baseGoldReward: 14000 },
+
+  // ========== NATIONAL RANK (Level 91-100) ==========
+  { name: 'Dragon Emperor', rank: 'National', emoji: '🐲', title: 'Apex Predator', baseHp: 10000, baseAtk: 300, baseDef: 150, abilities: ['Dragon God Breath', 'Supreme Strike', 'Dragon Emperor Domain'], minLevel: 91, baseXPReward: 90000, baseCrystalReward: 9000, baseGoldReward: 18000 },
+  { name: 'Shadow Sovereign', rank: 'National', emoji: '👤', title: 'Ruler of All Shadows', baseHp: 9500, baseAtk: 310, baseDef: 145, abilities: ['Shadow Dominion', 'Void Emperor', 'Monarch Supreme'], minLevel: 95, baseXPReward: 100000, baseCrystalReward: 10000, baseGoldReward: 20000 },
+  { name: 'The Creator', rank: 'National', emoji: '⭐', title: 'Origin of All Systems', baseHp: 12000, baseAtk: 350, baseDef: 175, abilities: ['Creation', 'Destruction', 'Absolute Authority'], minLevel: 100, baseXPReward: 150000, baseCrystalReward: 15000, baseGoldReward: 30000 },
+
+  // ========== BEYOND NATIONAL (Level 100+) ==========
+  { name: 'The Absolute Being', rank: 'Beyond', emoji: '🌟', title: 'God of All', baseHp: 15000, baseAtk: 400, baseDef: 200, abilities: ['Divine Judgment', 'Absolute Power', 'God Domain'], minLevel: 105, baseXPReward: 200000, baseCrystalReward: 20000, baseGoldReward: 40000 },
+  { name: 'The Eternal One', rank: 'Beyond', emoji: '♾️', title: 'Beyond Time and Space', baseHp: 20000, baseAtk: 500, baseDef: 250, abilities: ['Eternity', 'Infinity', 'Transcendence'], minLevel: 110, baseXPReward: 300000, baseCrystalReward: 30000, baseGoldReward: 60000 },
+];
+
+class BossManager {
+  // ✅ CRITICAL FIX: Filter bosses by player level
+  static getAvailableBosses(playerLevel) {
+    return bossTemplates.filter(boss => {
+      // Players can fight bosses at their minimum level
+      // But can only fight bosses within +5 levels of their current level
+      return boss.minLevel <= playerLevel && boss.minLevel >= (playerLevel - 5);
+    });
+  }
+
+  static generateBoss(template, playerLevel) {
+    // Scale boss stats based on player level
+    const levelDiff = Math.max(0, playerLevel - template.minLevel);
+    const scaleFactor = 1 + (levelDiff * 0.1);
+
+    return {
+      name: template.name,
+      rank: template.rank,
+      emoji: template.emoji,
+      title: template.title,
+      abilities: [...template.abilities],
+      minLevel: template.minLevel,
+      stats: {
+        hp: Math.floor(template.baseHp * scaleFactor),
+        maxHp: Math.floor(template.baseHp * scaleFactor),
+        atk: Math.floor(template.baseAtk * scaleFactor),
+        def: Math.floor(template.baseDef * scaleFactor)
+      },
+      baseXPReward: template.baseXPReward,
+      baseCrystalReward: template.baseCrystalReward,
+      baseGoldReward: template.baseGoldReward
+    };
+  }
+
+  static calculateBossRewards(boss, playerLevel) {
+    const levelBonus = 1 + (playerLevel * 0.05);
+    
+    return {
+      xp: Math.floor(boss.baseXPReward * levelBonus),
+      crystals: Math.floor(boss.baseCrystalReward * levelBonus),
+      gold: Math.floor(boss.baseGoldReward * levelBonus)
+    };
+  }
+
+  static generateBossLoot(boss, playerLevel) {
+    const loot = [];
+    const rarityChances = {
+      'F': { common: 0.7, uncommon: 0.25, rare: 0.05, epic: 0, legendary: 0 },
+      'E': { common: 0.6, uncommon: 0.3, rare: 0.08, epic: 0.02, legendary: 0 },
+      'D': { common: 0.5, uncommon: 0.3, rare: 0.15, epic: 0.05, legendary: 0 },
+      'C': { common: 0.4, uncommon: 0.3, rare: 0.2, epic: 0.08, legendary: 0.02 },
+      'B': { common: 0.3, uncommon: 0.3, rare: 0.25, epic: 0.12, legendary: 0.03 },
+      'A': { common: 0.2, uncommon: 0.3, rare: 0.3, epic: 0.15, legendary: 0.05 },
+      'S': { common: 0.1, uncommon: 0.2, rare: 0.3, epic: 0.25, legendary: 0.15 },
+      'SS': { common: 0.05, uncommon: 0.15, rare: 0.25, epic: 0.35, legendary: 0.20 },
+      'National': { common: 0, uncommon: 0.1, rare: 0.2, epic: 0.4, legendary: 0.30 },
+      'Beyond': { common: 0, uncommon: 0, rare: 0.1, epic: 0.3, legendary: 0.60 }
+    };
+
+    const chances = rarityChances[boss.rank] || rarityChances['F'];
+    const numItems = boss.rank === 'National' || boss.rank === 'Beyond' ? 3 : boss.rank === 'SS' ? 2 : 1;
+
+    for (let i = 0; i < numItems; i++) {
+      const roll = Math.random();
+      let rarity = 'common';
+      let cumulative = 0;
+
+      for (const [key, value] of Object.entries(chances)) {
+        cumulative += value;
+        if (roll <= cumulative) {
+          rarity = key;
+          break;
+        }
+      }
+
+      const itemTypes = ['Weapon', 'Armor', 'Accessory', 'Potion', 'Core'];
+      const itemType = itemTypes[Math.floor(Math.random() * itemTypes.length)];
+      
+      loot.push({
+        name: `${boss.rank}-Rank ${itemType}`,
+        type: itemType,
+        rarity: rarity,
+        from: boss.name
+      });
+    }
+
+    return loot;
+  }
+
+  // ✅ NEW: Function for co-op raids (generateRaidBoss)
+  static generateRaidBoss(minLevel) {
+    // Get bosses available for this level
+    const availableBosses = this.getAvailableBosses(minLevel);
+    
+    if (availableBosses.length === 0) {
+      // Fallback to highest available boss
+      const highestBoss = bossTemplates[bossTemplates.length - 1];
+      return this.generateBoss(highestBoss, minLevel);
+    }
+
+    // Select random boss
+    const template = availableBosses[Math.floor(Math.random() * availableBosses.length)];
+    const boss = this.generateBoss(template, minLevel);
+    
+    // Scale up for raid (3x stats)
+    boss.stats.hp *= 3;
+    boss.stats.maxHp *= 3;
+    boss.stats.atk = Math.floor(boss.stats.atk * 1.5);
+    boss.stats.def = Math.floor(boss.stats.def * 1.5);
+    
+    return boss;
+  }
+}
+
+module.exports = BossManager;

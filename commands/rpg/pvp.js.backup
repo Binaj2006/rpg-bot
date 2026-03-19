@@ -1,0 +1,387 @@
+const DetailedCombat = require('../../rpg/utils/DetailedCombat');
+const BarSystem = require('../../rpg/utils/BarSystem');
+const SkillDescriptions = require('../../rpg/utils/SkillDescriptions');
+
+module.exports = {
+  name: 'pvp',
+  description: '⚔️ Ultra-detailed PVP battles',
+  async execute(sock, msg, args, getDatabase, saveDatabase, sender) {
+    const chatId = msg.key.remoteJid;
+    const db = getDatabase();
+    const player = db.users[sender];
+
+    if (!player) {
+      return sock.sendMessage(chatId, { text: '❌ Start your journey first with /start!' }, { quoted: msg });
+    }
+
+    const action = args[0]?.toLowerCase();
+
+    // ═══════════════════════════════════════════════════════════════
+    // STATUS / MENU
+    // ═══════════════════════════════════════════════════════════════
+    if (!action || action === 'status') {
+      const activeBattle = player.pvpBattle;
+      
+      const hpBar = BarSystem.getHPBar(player.stats.hp, player.stats.maxHp);
+      const hpStatus = BarSystem.getHPStatus(player.stats.hp, player.stats.maxHp);
+      
+      // Fix: Pass class name string instead of class object
+      const className = typeof player.class === 'object' ? player.class.name : player.class;
+      const energyBar = BarSystem.getEnergyBar(
+        player.stats.energy, 
+        player.stats.maxEnergy, 
+        className
+      );
+
+      let statusMsg = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔️ PVP ARENA ⚔️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 YOUR STATUS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👤 ${player.name}
+🎭 ${className} | Lv ${player.level}
+
+❤️ HP: ${player.stats.hp}/${player.stats.maxHp} - ${hpStatus}
+${hpBar}
+
+${player.energyColor || '💙'} Energy: ${player.stats.energy}/${player.stats.maxEnergy}
+${energyBar}
+
+🏆 Rank: ${player.rank}
+⚔️ PVP Wins: ${player.pvpWins || 0}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+
+      if (activeBattle) {
+        const opponent = db.users[activeBattle.opponentId];
+        if (opponent) {
+          const oppClassName = typeof opponent.class === 'object' ? opponent.class.name : opponent.class;
+          const oppHPBar = BarSystem.getHPBar(opponent.stats.hp, opponent.stats.maxHp);
+          const oppEnergyBar = BarSystem.getEnergyBar(
+            opponent.stats.energy, 
+            opponent.stats.maxEnergy, 
+            oppClassName
+          );
+          
+          statusMsg += `⚔️ ACTIVE BATTLE!\n\n`;
+          statusMsg += `👤 ${opponent.name}\n`;
+          statusMsg += `🎭 ${oppClassName} | Lv ${opponent.level}\n\n`;
+          statusMsg += `❤️ HP: ${opponent.stats.hp}/${opponent.stats.maxHp}\n`;
+          statusMsg += `${oppHPBar}\n\n`;
+          statusMsg += `${opponent.energyColor || '💙'} Energy: ${opponent.stats.energy}/${opponent.stats.maxEnergy}\n`;
+          statusMsg += `${oppEnergyBar}\n`;
+        }
+      } else {
+        statusMsg += `✅ Ready to battle!\n`;
+      }
+
+      statusMsg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📜 COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/pvp challenge @user
+/pvp attack
+/pvp skill [name]
+/pvp surrender
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      return sock.sendMessage(chatId, { text: statusMsg }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CHALLENGE PLAYER
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'challenge') {
+      const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+      if (!mentions.length) {
+        return sock.sendMessage(chatId, { text: '❌ Mention a player to challenge!\n\nExample: /pvp challenge @player' }, { quoted: msg });
+      }
+
+      const opponentId = mentions[0];
+      if (opponentId === sender) {
+        return sock.sendMessage(chatId, { text: '❌ You cannot challenge yourself!' }, { quoted: msg });
+      }
+
+      const opponent = db.users[opponentId];
+      if (!opponent) {
+        return sock.sendMessage(chatId, { text: '❌ That player hasn\'t started their journey!' }, { quoted: msg });
+      }
+
+      if (player.stats.hp < player.stats.maxHp * 0.5) {
+        return sock.sendMessage(chatId, { text: '❌ You need at least 50% HP to challenge! Use /heal first.' }, { quoted: msg });
+      }
+
+      if (opponent.stats.hp < opponent.stats.maxHp * 0.5) {
+        return sock.sendMessage(chatId, { text: '❌ That player needs to heal before accepting challenges!' }, { quoted: msg });
+      }
+
+      // Initialize battle
+      player.pvpBattle = {
+        opponentId: opponentId,
+        turnCount: 0,
+        startTime: Date.now(),
+        lastAction: null
+      };
+
+      opponent.pvpBattle = {
+        opponentId: sender,
+        turnCount: 0,
+        startTime: Date.now(),
+        lastAction: null
+      };
+
+      // Set current HP for battle tracking
+      player.currentHP = player.stats.hp;
+      opponent.currentHP = opponent.stats.hp;
+
+      saveDatabase();
+
+      const playerClassName = typeof player.class === 'object' ? player.class.name : player.class;
+      const oppClassName = typeof opponent.class === 'object' ? opponent.class.name : opponent.class;
+      
+      const playerHPBar = BarSystem.getHPBar(player.stats.hp, player.stats.maxHp);
+      const playerEnergyBar = BarSystem.getEnergyBar(player.stats.energy, player.stats.maxEnergy, playerClassName);
+      const oppHPBar = BarSystem.getHPBar(opponent.stats.hp, opponent.stats.maxHp);
+      const oppEnergyBar = BarSystem.getEnergyBar(opponent.stats.energy, opponent.stats.maxEnergy, oppClassName);
+
+      return sock.sendMessage(chatId, { 
+        text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚔️ PVP BATTLE START! ⚔️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👤 ${player.name}
+🎭 ${playerClassName} | Lv ${player.level}
+❤️ HP: ${player.stats.hp}/${player.stats.maxHp}
+${playerHPBar}
+${player.energyColor || '💙'} Energy: ${player.stats.energy}/${player.stats.maxEnergy}
+${playerEnergyBar}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👤 ${opponent.name}
+🎭 ${oppClassName} | Lv ${opponent.level}
+❤️ HP: ${opponent.stats.hp}/${opponent.stats.maxHp}
+${oppHPBar}
+${opponent.energyColor || '💙'} Energy: ${opponent.stats.energy}/${opponent.stats.maxEnergy}
+${oppEnergyBar}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 Use /pvp attack or /pvp skill [name]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━` 
+      }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ATTACK
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'attack') {
+      const battle = player.pvpBattle;
+      if (!battle) {
+        return sock.sendMessage(chatId, { text: '❌ No active PVP battle! Use /pvp challenge @player first.' }, { quoted: msg });
+      }
+
+      const opponent = db.users[battle.opponentId];
+      if (!opponent) {
+        player.pvpBattle = null;
+        saveDatabase();
+        return sock.sendMessage(chatId, { text: '❌ Opponent not found! Battle ended.' }, { quoted: msg });
+      }
+
+      // Prepare attacker and defender for combat
+      const attacker = {
+        ...player,
+        currentHP: player.stats.hp,
+        name: player.name,
+        level: player.level
+      };
+
+      const defender = {
+        ...opponent,
+        currentHP: opponent.stats.hp,
+        maxHp: opponent.stats.maxHp,
+        name: opponent.name,
+        level: opponent.level
+      };
+
+      // Calculate damage
+      const baseDamage = Math.floor(player.stats.atk * 1.2);
+      const isCrit = Math.random() < 0.15;
+      const damage = isCrit ? Math.floor(baseDamage * 1.5) : baseDamage;
+      
+      // Apply damage
+      opponent.stats.hp = Math.max(0, opponent.stats.hp - damage);
+      defender.currentHP = opponent.stats.hp;
+
+      battle.turnCount++;
+
+      // Generate battle narrative
+      let battleLog = DetailedCombat.generateAttackNarrative(attacker, defender, damage, isCrit);
+
+      // Check for victory
+      if (opponent.stats.hp <= 0) {
+        battleLog += `\n${DetailedCombat.generateFaintMessage(opponent, player)}`;
+        battleLog += `\n🏆 ${player.name} WINS!\n`;
+        battleLog += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        battleLog += `💰 Rewards:\n`;
+        battleLog += `   💫 +50 XP\n`;
+        battleLog += `   🪙 +100 Gold\n`;
+        battleLog += `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+        
+        player.pvpWins = (player.pvpWins || 0) + 1;
+        player.xp = (player.xp || 0) + 50;
+        player.gold = (player.gold || 0) + 100;
+        player.pvpBattle = null;
+        opponent.pvpBattle = null;
+        opponent.stats.hp = Math.floor(opponent.stats.maxHp * 0.1); // Leave with 10% HP
+      }
+
+      saveDatabase();
+      return sock.sendMessage(chatId, { text: battleLog }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SKILL
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'skill') {
+      const battle = player.pvpBattle;
+      if (!battle) {
+        return sock.sendMessage(chatId, { text: '❌ No active PVP battle! Use /pvp challenge @player first.' }, { quoted: msg });
+      }
+
+      const opponent = db.users[battle.opponentId];
+      if (!opponent) {
+        player.pvpBattle = null;
+        saveDatabase();
+        return sock.sendMessage(chatId, { text: '❌ Opponent not found! Battle ended.' }, { quoted: msg });
+      }
+
+      const skillName = args.slice(1).join(' ');
+      if (!skillName) {
+        return sock.sendMessage(chatId, { 
+          text: '❌ Specify a skill name!\n\nExample: /pvp skill Fireball' 
+        }, { quoted: msg });
+      }
+
+      // Find skill
+      const skill = player.skills?.active?.find(s => 
+        s.name.toLowerCase() === skillName.toLowerCase()
+      );
+
+      if (!skill) {
+        return sock.sendMessage(chatId, { 
+          text: `❌ You don't have the skill "${skillName}"!\n\nUse /skills to see your available skills.` 
+        }, { quoted: msg });
+      }
+
+      // Check energy cost
+      if (player.stats.energy < skill.energyCost) {
+        return sock.sendMessage(chatId, { 
+          text: `❌ Not enough ${player.energyType || 'Energy'}! Need ${skill.energyCost}, have ${player.stats.energy}.` 
+        }, { quoted: msg });
+      }
+
+      // Prepare attacker and defender for combat
+      const attacker = {
+        ...player,
+        currentHP: player.stats.hp,
+        name: player.name,
+        level: player.level
+      };
+
+      const defender = {
+        ...opponent,
+        currentHP: opponent.stats.hp,
+        maxHp: opponent.stats.maxHp,
+        name: opponent.name,
+        level: opponent.level
+      };
+
+      // Calculate damage
+      const baseDamage = Math.floor((skill.damage || player.stats.atk) * 1.5);
+      const isCrit = Math.random() < 0.2;
+      const damage = isCrit ? Math.floor(baseDamage * 1.8) : baseDamage;
+      
+      // Apply damage and energy cost
+      opponent.stats.hp = Math.max(0, opponent.stats.hp - damage);
+      player.stats.energy = Math.max(0, player.stats.energy - skill.energyCost);
+      
+      defender.currentHP = opponent.stats.hp;
+      attacker.stats.energy = player.stats.energy;
+
+      battle.turnCount++;
+
+      // Generate battle narrative with skill effects
+      let battleLog = DetailedCombat.generateSkillNarrative(attacker, defender, skill, damage, isCrit, null);
+
+      // Check for victory
+      if (opponent.stats.hp <= 0) {
+        battleLog += `\n${DetailedCombat.generateFaintMessage(opponent, player)}`;
+        battleLog += `\n🏆 ${player.name} WINS!\n`;
+        battleLog += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        battleLog += `💰 Rewards:\n`;
+        battleLog += `   💫 +50 XP\n`;
+        battleLog += `   🪙 +100 Gold\n`;
+        battleLog += `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+        
+        player.pvpWins = (player.pvpWins || 0) + 1;
+        player.xp = (player.xp || 0) + 50;
+        player.gold = (player.gold || 0) + 100;
+        player.pvpBattle = null;
+        opponent.pvpBattle = null;
+        opponent.stats.hp = Math.floor(opponent.stats.maxHp * 0.1); // Leave with 10% HP
+      }
+
+      saveDatabase();
+      return sock.sendMessage(chatId, { text: battleLog }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SURRENDER
+    // ═══════════════════════════════════════════════════════════════
+    if (action === 'surrender') {
+      if (!player.pvpBattle) {
+        return sock.sendMessage(chatId, { text: '❌ No active PVP battle!' }, { quoted: msg });
+      }
+
+      const opponent = db.users[player.pvpBattle.opponentId];
+      
+      let surrenderMsg = `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏳️ SURRENDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${player.name} has surrendered!
+
+`;
+
+      if (opponent) {
+        opponent.pvpWins = (opponent.pvpWins || 0) + 1;
+        opponent.pvpBattle = null;
+        surrenderMsg += `🏆 ${opponent.name} wins by default!\n`;
+      }
+
+      player.pvpBattle = null;
+      player.stats.hp = Math.floor(player.stats.maxHp * 0.3); // Lose HP for surrendering
+
+      surrenderMsg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      saveDatabase();
+      return sock.sendMessage(chatId, { text: surrenderMsg }, { quoted: msg });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // INVALID COMMAND
+    // ═══════════════════════════════════════════════════════════════
+    return sock.sendMessage(chatId, { 
+      text: `❌ Invalid PVP command!
+
+Available commands:
+/pvp status - View battle status
+/pvp challenge @user - Challenge a player
+/pvp attack - Basic attack
+/pvp skill [name] - Use a skill
+/pvp surrender - Give up` 
+    }, { quoted: msg });
+  }
+};
